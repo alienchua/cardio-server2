@@ -1,0 +1,84 @@
+require('dotenv').config();
+
+const insertStaffsModel = async (req, staffs) => {
+  const client = req.db; // assuming `req.db` is pg client
+
+  const columns = [
+    "staff_id", "name", "ic", "bank_name", "acc_number",
+    "nick_name", "type", "photo", "email", "gender",
+    "kwsp_id", "contact"
+  ];
+
+  // Generate placeholders like ($1,$2,...), ($13,$14,...) for each row
+  const values = [];
+  const placeholders = staffs.map((staff, i) => {
+    const baseIndex = i * columns.length;
+    values.push(
+      staff.staff_id,
+      staff.name,
+      staff.ic,
+      staff.bank_name,
+      staff.acc_number,
+      staff.nick_name,
+      staff.type,
+      staff.photo,
+      staff.email,
+      staff.gender,
+      staff.kwsp_id,
+      staff.contact
+    );
+    return `(${columns.map((_, j) => `$${baseIndex + j + 1}`).join(",")})`;
+  }).join(",");
+
+  const sql = `
+    INSERT INTO staff (${columns.join(", ")})
+    VALUES ${placeholders}
+  `;
+
+  // return client.query(sql, values);
+
+  const result = await req.app.get('pool').query(
+    sql,
+    values
+  );
+  return result.rows
+
+
+};
+
+const getFullStaff = async (req  ) => {
+
+  const query = `SELECT * FROM staff`;
+
+  const values = [
+  ];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
+  // const res = await req.query(query, values);
+  return result.rows;
+};
+
+const updateStaffBystaff_id = async (req , bank_name , acc_number , staff_id) => {
+
+  const query = `UPDATE staff SET bank_name = $1 , acc_number = $2 WHERE staff_id = $3 RETURNING *`;
+
+  const values = [
+    bank_name , acc_number , staff_id
+  ];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
+  // const res = await req.query(query, values);
+  return result.rows;
+};
+
+module.exports = {
+  insertStaffsModel,
+  getFullStaff,
+  updateStaffBystaff_id
+};
