@@ -21,12 +21,12 @@ const getUserByPhoneOrEmail = async (req, phone , email) => {
   return res.rows[0];
 };
 
-const createUser = async (req, username,email,phone_country,phone_number,password,wallet,earn,status) => {
+const createUser = async (req, name, email , hashedPassword, position,status) => {
   const result = await req.app.get('pool').query(
     `INSERT INTO users (
-  username,email,phone_country,phone_number,password,wallet,earn,status
+   name, email , hashedPassword, position,status
 ) VALUES  ($1, $2, $3, $4, $5, $6, $7 , $8) RETURNING *`,
-    [username,email,phone_country,phone_number,password,wallet,earn,status]
+    [ name, email , hashedPassword, position,status]
   );
   return result.rows[0];
 };
@@ -80,6 +80,12 @@ const updateUserWallet = async (req, amount ,userId) => {
   return result.rows[0];
 };
 
+const insertRole = async (req, title ,url , icon , userid) => {
+  const result = await req.app.get('pool').query(`INSERT INTO user_auth (title ,url , icon , userid)
+    VALUES ($1 , $2, $3, $4)`, [ title ,url , icon , userid]);
+  return result.rows[0];
+};
+
 module.exports = {
   getUserByEmail,
   getUserByUsername,
@@ -94,5 +100,6 @@ module.exports = {
   updateUserPoint,
   updateUserEarn, 
   updateUserWallet,
-  getUserByPhoneOrEmail
+  getUserByPhoneOrEmail,
+  insertRole
 };

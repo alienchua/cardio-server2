@@ -11,7 +11,8 @@ const {
   deleteAccessToken,
   deleteRefreshToken,
   updateLastLogin,
-  getUserByPhone
+  getUserByPhone,
+  insertRole
 } = require('../models/userModel');
 require('dotenv').config();
 
@@ -20,7 +21,7 @@ const generateToken = (user, expiresIn) => {
 };
 
 const register = async (req, res, next) => {
-  const { username, email, password, phone, prefix, passcode } = req.body;
+  const { name, email, password , autho , position , status} = req.body;
   try {
     if (email) {
       const existingEmail = await getUserByEmail(req, email);
@@ -33,36 +34,18 @@ const register = async (req, res, next) => {
       }
     }
 
-    if (phone && prefix) {
-
-      const { isValid, phoneNumber } = await phoneValidator(`+(${prefix})${phone}`)
-
-      if (!isValid) {
-        return res.status(400).json({
-          success: false,
-          message: 'Validation Error',
-          errors: [{ field: 'phone', message: 'Not a phone format' }],
-        });
-      }
-
-
-      const existingPhone = await getUserByPhone(req, phoneNumber);
-
-
-      if (existingPhone) {
-        return res.status(400).json({
-          success: false,
-          message: 'Validation Error',
-          errors: [{ field: 'phone', message: 'Phone number already exists' }],
-        });
-      }
-    }
     let hashedPassword;
     if (password) {
       hashedPassword = await bcrypt.hash(password, 10);
     }
 
-    const user = await createUser(req, username, email, phoneValidator(`+(${prefix})${phone}`).phoneNumber, hashedPassword, passcode);
+    const user = await createUser(req, name, email , hashedPassword, position , status);
+
+    for (const acc of item.accessories || []) {
+
+
+    }
+    // await insertRole
 
     console.log(user)
     const accessToken = generateToken(user, '15m');

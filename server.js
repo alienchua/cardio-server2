@@ -65,7 +65,7 @@ i18next.use(Backend).init({
 
 
 
-const initializeWebSocketServer = require('./modules/realtime/v1/config/websocketConfig');
+const { initializeWebSocketServer } = require('./modules/realtime/v1/config/websocketConfig');
 const app = express();
 const server = http.createServer(app);
 const wss = initializeWebSocketServer(server); // Initialize WebSocket server
@@ -85,15 +85,18 @@ app.use(cors({
 // Use routes
 app.use(cookieParser());
 
+const jsonParser = express.json({ limit: '500mb' });
+const urlEncodedParser = express.urlencoded({ extended: true, limit: '500mb' });
+
 app.use((req, res, next) => {
-	if (req.originalUrl === '/stripeWebhook') {
-		next();
-	} else {
-		express.json({ limit: '1024mb' })(req, res, next);
-	}
+  if (req.originalUrl === '/stripeWebhook') {
+    next();
+  } else {
+    jsonParser(req, res, next);
+  }
 });
 
-app.use(express.urlencoded({ extended: true }));
+app.use(urlEncodedParser);
 app.use(helmet());
 app.use(
   helmet.contentSecurityPolicy({
