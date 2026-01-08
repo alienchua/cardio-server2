@@ -141,6 +141,74 @@ const getNewAccessoryByNo = async (req,  no) => {
   return result.rows[0];
 };
 
+const getAccessoryGroup = async (req,  no) => {
+
+  const result = await req.app.get('pool').query(`SELECT model_code , model , model_description  , count(*) as total_products FROM accessories
+GROUP BY model_code , model , model_description `);
+  return result.rows;
+};
+
+const getAccessoriesByModel = async (req, model_code, model_description) => {
+  console.log( model_code, model_description)
+  const query = `
+    SELECT *
+    FROM accessories
+    WHERE ($1::text IS NULL OR model_code = $1)
+      AND ($2::text IS NULL OR model = $2)
+    ORDER BY accessory_type, accessory_code
+  `;
+  const values = [
+    model_code || null,
+    model_description || null
+  ];
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows;
+};
+
+const updateAccessories2Model = async (req, updates) => {
+  const pool = req.app.get('pool');
+  if (!pool) {
+    throw new Error('Database connection not available');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const results = [];
+
+    for (const u of updates) {
+      const { price, duration, type, full_name, short_name, no } = u;
+
+      const accessoryQuery = `
+        UPDATE accessories 
+        SET price = $1, duration = $2, type = $3, full_name = $4, short_name = $5
+        WHERE no = $6 
+        RETURNING *;
+      `;
+      const accessoryValues = [price, duration, type, full_name, short_name, no];
+      const accessoryResult = await client.query(accessoryQuery, accessoryValues);
+
+      const taskItemQuery = `
+        UPDATE task_item
+        SET price = $1, duration = $2, type = $3, short_name = $4
+        WHERE accessories_id = $5
+        RETURNING *;
+      `;
+      await client.query(taskItemQuery, [price, duration, type, short_name, no]);
+
+      results.push(accessoryResult.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    return results;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
 
 module.exports = {
   updateAccessoriesModel,
@@ -149,5 +217,8 @@ module.exports = {
   findAccessory,
   updateAccessoryByNO,
   getNewAccessory,
-  getNewAccessoryByNo
+  getNewAccessoryByNo,
+  getAccessoryGroup,
+  getAccessoriesByModel,
+  updateAccessories2Model
 };

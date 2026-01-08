@@ -47,6 +47,7 @@ const initializeWebSocketServer = (server) => {
           // Subscribe to a topic
           clients.get(ws).topics.push(parsedMessage.topic);
           console.log(`Client ${clientId} subscribed to topic ${parsedMessage.topic}`);
+          logSubscriptions();
         }
 
         if (parsedMessage.type === 'publish') {
@@ -149,4 +150,48 @@ const initializeWebSocketServer = (server) => {
   return wss;
 };
 
-module.exports = initializeWebSocketServer;
+const logSubscriptions = () => {
+  const summary = [];
+  clients.forEach((client) => {
+    summary.push({ id: client.id, topics: client.topics });
+  });
+  console.log('[ws subscriptions]', summary);
+};
+
+const broadcastToTopic = (topic, content) => {
+  if (!topic) return;
+  const payload = JSON.stringify({ topic, content });
+  let sent = 0;
+  clients.forEach((client, clientWs) => {
+    if (client.topics.includes(topic)) {
+      try {
+        clientWs.send(payload);
+        sent += 1;
+      } catch (err) {
+        console.error('WebSocket broadcast error', err);
+      }
+    }
+  });
+
+  // If nobody explicitly subscribed, fall back to broadcasting to all clients
+  if (sent === 0) {
+    clients.forEach((_, clientWs) => {
+      try {
+        clientWs.send(payload);
+      } catch (err) {
+        console.error('WebSocket broadcast error (fallback)', err);
+      }
+    });
+  }
+  console.log(`[ws broadcast] topic=${topic} subscribers=${sent} payload=`, content);
+};
+
+const broadcastToTopics = (topics = [], content = {}) => {
+  (topics || []).forEach((t) => broadcastToTopic(t, content));
+};
+
+module.exports = {
+  initializeWebSocketServer,
+  broadcastToTopic,
+  broadcastToTopics
+};

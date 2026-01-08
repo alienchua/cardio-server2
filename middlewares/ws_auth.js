@@ -2,9 +2,14 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const auth = (info, callback) => {
-  const token = info.req.headers['authorization']?.replace('Bearer ', '');
+  const url = new URL(info.req.url, `http://${info.req.headers.host}`);
+  const token =
+    info.req.headers['authorization']?.replace('Bearer ', '') ||
+    url.searchParams.get('token');
   if (!token) {
-    return callback(new Error('No token, authorization denied'), false);
+    // Allow anonymous websocket (for public dashboards)
+    info.req.user = null;
+    return callback(null, true);
   }
 
   try {

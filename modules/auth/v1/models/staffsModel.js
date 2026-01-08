@@ -77,8 +77,59 @@ const updateStaffBystaff_id = async (req , bank_name , acc_number , staff_id) =>
   return result.rows;
 };
 
+const getStaffById = async (req , staff_id ) => {
+
+  const query = `SELECT * FROM staff WHERE no = $1`;
+
+  const values = [
+    staff_id
+  ];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
+  // const res = await req.query(query, values);
+  return result.rows[0];
+};
+
+const insertStaff = async (req, staff) => {
+  const columns = [
+    "staff_id", "name", "ic", "bank_name", "acc_number",
+    "nick_name", "type", "photo", "email", "gender",
+    "kwsp_id", "contact"
+  ];
+  
+
+  const query = `
+    INSERT INTO staff (${columns.join(', ')})
+    VALUES (${columns.map((_, idx) => `$${idx + 1}`).join(', ')})
+    RETURNING *
+  `;
+
+  const values = [
+    staff.staff_id || null,
+    staff.name || null,
+    staff.ic || null,
+    staff.bank_name || null,
+    staff.acc_number || null,
+    staff.nick_name || null,
+    staff.type || null,
+    staff.photo || null,
+    staff.email || null,
+    staff.gender || null,
+    staff.kwsp_id || null,
+    staff.contact || null
+  ];
+
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows[0];
+};
+
 module.exports = {
   insertStaffsModel,
   getFullStaff,
-  updateStaffBystaff_id
+  updateStaffBystaff_id,
+  getStaffById,
+  insertStaff
 };

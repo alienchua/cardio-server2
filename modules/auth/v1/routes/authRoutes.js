@@ -10,38 +10,87 @@ const {
   getUser} = require('../controllers/authController');
 
 const { 
+  createAdmin,
+  adminLogin,
+  getAdminWithId,
+  updateAdminById,
+  getAddAdmin,
+  getCurrentAdmin
+} = require('../controllers/adminsController');
+
+const { 
   updateAccessories,
   insertAccessories ,
   updateAccessory,
   getNewAccessoryList,
   getAccessory,
   updateAccessories2,
-  insertAccessories2} = require('../controllers/accessoriesController');
+  insertAccessories2,
+  getAccessoryGroupCtrl,
+  getAccessoriesByModelCtrl} = require('../controllers/accessoriesController');
 
 const { 
   insertStaffs ,
   getStaffList,
-  updateStaffBy
+  updateStaffBy,
+  updateStaffBay,
+  uploadStaffAttendance,
+  createStaff
 } = require('../controllers/staffsController');
 const { 
-  getBayListByType } = require('../controllers/bayController');
+  getBayListByType,
+  getBayListCtrl,
+  getStaffEmptyBayCtrl,
+  removeStaff,
+  insertStafftoBay,
+  getBayCheckinListCtrl,
+  getBayHistoryCtrl } = require('../controllers/bayController');
 const { 
   createInstallment,
   getInstallmentCtrl ,
-  getSalaryResultByMonth} = require('../controllers/salaryController');
+  getInstallmentByNoCtrl,
+  getSalaryResultByMonth,
+  getSalaryDetailByStaff,
+  getSalaryVoucherDetail,
+  getSalaryVoucherDetailByBay,
+  setSettlement} = require('../controllers/salaryController');
 
 const { 
   insertMasterlistWithAccessories,
   checkInTask,
   checkOutTask,
   getCheckInListCrtl,
+  getCheckInListCrtl2,
   getMasterListCtrl,
+  getMasterBacklogCountCtrl,
+  getTasksBacklogCountCtrl,
+  getDashboardStatsCtrl,
+  getLastOpenCafiDateCtrl,
   getMasterDetail,
   taskOffset,
   getTasksListCtrl,
   getTasksListCtrl2,
   getMasterListCtrl2,
-  deleteCheckinStaffCtrl} = require('../controllers/tasksController');
+  deleteCheckinStaffCtrl,
+  getStandyListToday,
+  pickStandby,
+  getPickUpListNow,
+  checkRemark,
+  getStandbyListCtrl,
+  updatecheckInTask,
+  getCurrentCheckInCtrl,
+  getCollectScreenCtrl,
+  getBayCurrentCheckinCtrl,
+  getTaskDetail,
+  getmasterDetail2,
+  getStaffDetail,
+  standbytoCheckIn,
+  getPickCheckinCtrl,
+  inactiveMasterCtrl,
+  getstandbyHistory,
+  cancelMasterlistRangeCtrl,
+  manualCheckin,
+  addCheckinStaffCtrl} = require('../controllers/tasksController');
   
 const auth = require('../../../../middlewares/auth');
 const errorFormatter = require('../../../../middlewares/errorFormatter');
@@ -69,19 +118,32 @@ const loginValidation = [
 ];
 router.post('/register',sanitizeInputs, registerValidation, errorFormatter, register);
 router.post('/login',sanitizeInputs,loginValidation, preventbrute ('email'),preventbrute ('phone'),errorFormatter, login);
+router.post('/adminLogin', sanitizeInputs, loginValidation, errorFormatter, adminLogin);
 router.post('/refresh-token', errorFormatter, refreshAccessToken);
 router.post('/logout', auth, logout);
+router.get('/admin/me', auth, getCurrentAdmin);
 router.post('/add-to-blacklist', sanitizeInputs, [
   body('token').exists().withMessage('Token is required')
 ], errorFormatter, addToBlacklist);
 router.get('/dashboard', auth,  roleMiddleware('admin'),errorFormatter,responseFormatter, dashboard);
 router.post('/getUser', getUser);
+router.post('/createAdmin', createAdmin);
+router.get('/getAdminWithId/:id', getAdminWithId);
+router.post('/updateAdmin', updateAdminById);
+router.get('/getAddAdmin', getAddAdmin);
 
 // staffs
 router.post('/insertStaffs', insertStaffs);
 router.get('/getStaffList', getStaffList);
 router.post('/getSalaryResultByMonth', getSalaryResultByMonth);
 router.post('/updateStaffBy', updateStaffBy);
+router.post('/getSalaryDetailByStaff', getSalaryDetailByStaff);
+router.post('/getSalaryVoucherDetail', getSalaryVoucherDetail);
+router.post('/getSalaryVoucherDetailByBay', getSalaryVoucherDetailByBay);
+router.post('/updateStaffBay', updateStaffBay);
+router.post('/setSettlement', setSettlement);
+router.post('/uploadStaffAttendance', uploadStaffAttendance);
+router.post('/createStaff', createStaff);
 
 
 
@@ -93,7 +155,8 @@ router.post('/getNewAccessoryList', getNewAccessoryList);
 router.post('/getAccessory', getAccessory);
 router.post('/updateAccessories2', updateAccessories2);
 router.post('/insertAccessories2', insertAccessories2);
-
+router.get('/getAccessoryGroupCtrl', getAccessoryGroupCtrl);
+router.post('/getAccessoriesByModel', getAccessoriesByModelCtrl);
 
 //MasterList
 router.post('/insertMasterlistWithAccessories', insertMasterlistWithAccessories);
@@ -102,26 +165,54 @@ router.post('/insertMasterlistWithAccessories', insertMasterlistWithAccessories)
 router.post('/checkInTask', checkInTask);
 router.post('/checkOutTask', checkOutTask);
 router.get('/getCheckInListCrtl', getCheckInListCrtl);
+router.post('/getCheckInListCrtl2', getCheckInListCrtl2);
 router.get('/getMasterListCtrl', getMasterListCtrl);
+router.get('/getMasterBacklogCount', getMasterBacklogCountCtrl);
+router.get('/getTasksBacklogCount', getTasksBacklogCountCtrl);
+router.get('/getLastOpenCafiDate', getLastOpenCafiDateCtrl);
+router.get('/dashboardStats', getDashboardStatsCtrl);
 router.post('/getMasterDetail', getMasterDetail);
 router.post('/taskOffset', taskOffset);
 router.get('/getTasksListCtrl', getTasksListCtrl);
 router.post('/getTasksListCtrl2', getTasksListCtrl2);
 router.post('/getMasterListCtrl2', getMasterListCtrl2);
+router.post('/cancelMasterlistRange', cancelMasterlistRangeCtrl);
 router.post('/deleteCheckinStaffCtrl', deleteCheckinStaffCtrl);
+router.post('/pickStandby', pickStandby);
+router.get('/getPickUpListNow', getPickUpListNow);
+router.post('/checkRemark', checkRemark);
+router.post('/getStandbyListCtrl', getStandbyListCtrl);
+router.get('/getCollectScreenCtrl', getCollectScreenCtrl);
+router.post('/getBayCurrentCheckinCtrl', getBayCurrentCheckinCtrl);
+router.post('/getTaskDetail', getTaskDetail);
+router.post('/getmasterDetail2', getmasterDetail2);
+router.post('/getStaffDetail', getStaffDetail);
+router.post('/standbytoCheckIn', standbytoCheckIn);
+router.get('/getPickCheckinCtrl', getPickCheckinCtrl);
+router.get('/getstandbyHistory', getstandbyHistory);
+router.post('/inactiveMasterCtrl', inactiveMasterCtrl);
+router.get('/getBayCheckinListCtrl', getBayCheckinListCtrl);
+router.post('/getBayHistoryCtrl', getBayHistoryCtrl);
+router.post('/manualCheckin', manualCheckin);
+router.post('/addCheckinStaffCtrl', addCheckinStaffCtrl);
 
+//bay
 router.post('/getBayListByType', getBayListByType);
-// router.post('/getBayListByType', getBayListByType);
+router.get('/getBayListCtrl', getBayListCtrl);
+router.get('/getStaffEmptyBayCtrl', getStaffEmptyBayCtrl);
+router.post('/removeStaff', removeStaff);
+router.post('/insertStafftoBay', insertStafftoBay);
+
+
+
+router.post('/getStandyListToday', getStandyListToday);
+router.post('/updatecheckInTask', updatecheckInTask);
+router.get('/getCurrentCheckInCtrl', getCurrentCheckInCtrl);
 
 // installment
 router.post('/createInstallment', createInstallment);
 router.get('/getInstallmentCtrl', getInstallmentCtrl);
+router.post('/getInstallmentByNo', getInstallmentByNoCtrl);
 
 
 module.exports = router;
-
-
-
-
-
-

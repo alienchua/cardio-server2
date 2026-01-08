@@ -1,6 +1,5 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { pool } = require('pg');
 
 const {
   updateAccessoriesModel,
@@ -8,7 +7,10 @@ const {
   updateAccessoryByNO,
   getNewAccessory,
   findAccessory,
-  getNewAccessoryByNo
+  getNewAccessoryByNo,
+  getAccessoryGroup,
+  getAccessoriesByModel,
+  updateAccessories2Model
 } = require('../models/accessoriesModel');
 
 require('dotenv').config();
@@ -45,36 +47,12 @@ const updateAccessories2 = async (req, res, next) => {
     return res.status(400).json({ message: "No updates provided" });
   }
 
-  const client = await pool.connect();
-
   try {
-    await client.query("BEGIN");
-    const results = [];
-
-    for (const u of updates) {
-      console.log(u)
-      const { price, duration, type, full_name, short_name, no } = u;
-
-      const query = `
-        UPDATE accessories 
-        SET price = $1, duration = $2, type = $3, full_name = $4, short_name = $5
-        WHERE no = $6 
-        RETURNING *;
-      `;
-
-      const values = [price, duration, type, full_name, short_name, no];
-      const result = await client.query(query, values);
-      results.push(result.rows[0]);
-    }
-
-    await client.query("COMMIT");
+    const results = await updateAccessories2Model(req, updates);
     res.json({ success: true, updated: results });
   } catch (err) {
-    await client.query("ROLLBACK");
     console.error("Update failed:", err);
     res.status(500).json({ message: "Update failed", error: err.message });
-  } finally {
-    client.release();
   }
 
 }
@@ -163,8 +141,6 @@ const getAccessory = async (req, res, next) => {
 };
 
 const insertAccessories2 = async (req, res, next) => {
-
-
   const updates = req.body; // expect array of objects
 
   if (!Array.isArray(updates) || updates.length === 0) {
@@ -190,8 +166,6 @@ const insertAccessories2 = async (req, res, next) => {
       const result = await client.query(query, values);
       results.push(result.rows[0]);
     }
-
-
     res.json({ success: true, updated: results });
   } catch (err) {
 
@@ -200,8 +174,42 @@ const insertAccessories2 = async (req, res, next) => {
   } finally {
 
   }
-
 }
+
+const getAccessoryGroupCtrl = async (req, res, next) => {
+
+  try {
+
+    const result = await getAccessoryGroup(req );
+
+    res.status(200).json({
+      success: true,
+      message: "Check Out successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getAccessoriesByModelCtrl = async (req, res, next) => {
+  const { model_code, model_description } = req.body;
+
+  console.log()
+
+  try {
+    const result = await getAccessoriesByModel(req, model_code, model_description);
+
+    res.status(200).json({
+      success: true,
+      message: "Accessories fetched successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+// getAccessoryGroup
 
 module.exports = {
   updateAccessories,
@@ -210,5 +218,7 @@ module.exports = {
   getNewAccessoryList,
   getAccessory,
   updateAccessories2,
-  insertAccessories2
+  insertAccessories2,
+  getAccessoryGroupCtrl,
+  getAccessoriesByModelCtrl
 };
