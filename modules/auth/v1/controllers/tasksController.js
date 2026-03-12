@@ -392,7 +392,7 @@ const getTasksListCtrl = async (req, res, next) => {
 
 const getTasksListCtrl2 = async (req, res, next) => {
 
-  const {  chassis , fitment_id , fitment_type, model , seq , date_from  ,date_to  , type, date_field, page, page_size } = req.body;
+  const {  chassis , fitment_id , fitment_type, model , seq , date_from  ,date_to  , type, status, date_field, page, page_size, include_analysis } = req.body;
 
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -408,24 +408,66 @@ const getTasksListCtrl2 = async (req, res, next) => {
       date_from : date_from || today,
       date_to : date_to || date_from || today,
       type : type,
+      status: status,
       date_field: date_field,
       limit: pageSizeNum,
       offset
     }
 
-    const result = await getTasksList2(req , data);
-    const analysis = await getTasksAnalisys2(req , data)
+    const { rows, total } = await getTasksList2(req , data);
+    const shouldIncludeAnalysis = include_analysis !== false && include_analysis !== 'false';
+    const analysis = shouldIncludeAnalysis
+      ? await getTasksAnalisys2(req , { ...data, status: undefined })
+      : [];
 
     res.status(200).json({
       success: true,
       message: "Get Check In List successfully",
-      data: result,
-      analysis :analysis
+      data: rows,
+      analysis :analysis,
+      pagination: {
+        page: pageNum,
+        page_size: pageSizeNum,
+        total,
+        total_pages: Math.max(1, Math.ceil(total / pageSizeNum))
+      }
     });
   } catch (error) {
     next(error);
   }
 
+};
+
+const getTasksReportCtrl = async (req, res, next) => {
+  const { chassis, fitment_id, fitment_type, model, seq, date_from, date_to, type, status, date_field } = req.body;
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const data = {
+      chassis,
+      fitment_id,
+      fitment_type,
+      model,
+      seq,
+      date_from: date_from || today,
+      date_to: date_to || date_from || today,
+      type,
+      status,
+      date_field,
+      // Export path: skip count/pagination work in model.
+      no_pagination: true,
+      skip_count: true
+    };
+
+    const { rows } = await getTasksList2(req, data);
+    res.status(200).json({
+      success: true,
+      message: 'Get Task Report successfully',
+      data: rows
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 const getAchievementListCtrl = async (req, res, next) => {
@@ -1118,6 +1160,7 @@ module.exports = {
   taskOffset,
   getTasksListCtrl,
   getTasksListCtrl2,
+  getTasksReportCtrl,
   getAchievementListCtrl,
   getMasterListCtrl2,
   getHourlyCompletedStatsCtrl,

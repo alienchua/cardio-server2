@@ -73,6 +73,7 @@ const {
   taskOffset,
   getTasksListCtrl,
   getTasksListCtrl2,
+  getTasksReportCtrl,
   getAchievementListCtrl,
   getHourlyCompletedStatsCtrl,
   getMasterListCtrl2,
@@ -180,6 +181,7 @@ router.post('/getMasterDetail', getMasterDetail);
 router.post('/taskOffset', taskOffset);
 router.get('/getTasksListCtrl', getTasksListCtrl);
 router.post('/getTasksListCtrl2', getTasksListCtrl2);
+router.post('/getTasksReportCtrl', getTasksReportCtrl);
 router.get('/getTasksStatusNullCount', getTasksStatusNullCountCtrl);
 router.post('/getAchievementListCtrl', getAchievementListCtrl);
 router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);

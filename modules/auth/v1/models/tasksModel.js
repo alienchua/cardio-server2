@@ -699,7 +699,13 @@ const getTasksList2 = async (req, data) => {
   }
 
   // Status (checkin table)
-  if (data.status && data.status !== 'All') addJoin((p) => `c.status ILIKE ${p[0]}`, [`%${data.status}%`]);
+  if (data.status && data.status !== 'All') {
+    if (data.status === 'PENDING') {
+      addJoin(() => `c.status IS NULL`);
+    } else {
+      addJoin((p) => `c.status ILIKE ${p[0]}`, [`%${data.status}%`]);
+    }
+  }
 
   // Type (task_item)
   if (data.type && data.type !== 'All') addJoin((p) => `m2.type = ${p[0]}`, [data.type]);
@@ -717,7 +723,7 @@ const getTasksList2 = async (req, data) => {
 
   const cteFilters = masterFilters;
 
-  let query = `
+  const baseQuery = `
    WITH filtered_master AS (
   SELECT *
   FROM masterlist
@@ -799,7 +805,7 @@ LEFT JOIN task_item t
   `;
 
   // 🔹 Grouping
-  query += `
+  let groupedQuery = `
     GROUP BY 
       m.no,
       m.model_code,
@@ -823,21 +829,73 @@ LEFT JOIN task_item t
   `;
 
   if (joinFilters.length > 0) {
-    query += ` HAVING ${joinFilters.join(' AND ')}`;
+    groupedQuery += ` HAVING ${joinFilters.join(' AND ')}`;
   }
 
-  // 🔹 Ordering + pagination
-  const limit = 10000 ;
-  const offset = Number(data?.offset) || 0;
-  query += `
+  const shouldSkipCount = data?.skip_count === true;
+  const noPagination = data?.no_pagination === true;
+
+  let total = 0;
+  if (!shouldSkipCount) {
+    let countQuery = `
+      WITH filtered_master AS (
+        SELECT *
+        FROM masterlist
+        WHERE ${cteFilters.join(' AND ')}
+      ),
+      grouped_rows AS (
+        SELECT
+          m.no,
+          m2.type,
+          c.no AS checkin_no
+        FROM filtered_master m
+        LEFT JOIN (
+          SELECT
+            TRIM(type) AS type,
+            masterlist_id
+          FROM task_item
+          WHERE TRIM(type) IN ('FITMENT', 'HOIST')
+          GROUP BY TRIM(type), masterlist_id
+        ) m2 ON m2.masterlist_id = m.no
+        LEFT JOIN checkin c
+          ON m.no = c.masterlist_id
+          AND c.type = m2.type
+    `;
+    if (joinFilters.length > 0) {
+      countQuery += ` WHERE ${joinFilters.join(' AND ')}`;
+    }
+    countQuery += `
+        GROUP BY m.no, m2.type, c.no
+      )
+      SELECT COUNT(*)::int AS total
+      FROM grouped_rows
+    `;
+    const countResult = await req.app.get('pool').query(countQuery, values);
+    total = Number(countResult.rows[0]?.total || 0);
+  }
+
+  let query = `
+    ${baseQuery}
+    ${groupedQuery}
     ORDER BY ${dateField} DESC, m.no ASC
-    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
   `;
-  values.push(limit, offset);
-  paramIndex += 2;
+
+  if (!noPagination) {
+    // 🔹 Ordering + pagination
+    const limit = Math.max(1, Math.min(Number(data?.limit) || 50, 200));
+    const offset = Number(data?.offset) || 0;
+    query += `
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+    values.push(limit, offset);
+    paramIndex += 2;
+  }
 
   const result = await req.app.get('pool').query(query, values);
-  return result.rows;
+  return {
+    rows: result.rows,
+    total
+  };
 };
 
 const getTasksStatusNullCount = async (req) => {
@@ -1296,7 +1354,6 @@ const getTasksAnalisys2 = async (req, data ) => {
       status, 
       COUNT(*)
     FROM selectdata
-    WHERE status IS NOT NULL
     GROUP BY status;
   `;
 
