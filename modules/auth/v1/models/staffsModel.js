@@ -61,20 +61,52 @@ const getFullStaff = async (req  ) => {
   return result.rows;
 };
 
-const updateStaffBystaff_id = async (req , bank_name , acc_number , staff_id) => {
+const updateStaffBystaff_id = async (req, payload = {}) => {
+  const identifier = payload.no || payload.id || payload.staff_no || payload.staff_id;
+  if (!identifier) {
+    const err = new Error('Staff identifier (no or staff_id) is required');
+    err.status = 400;
+    throw err;
+  }
 
-  const query = `UPDATE staff SET bank_name = $1 , acc_number = $2 WHERE staff_id = $3 RETURNING *`;
+  const updatable = {
+    staff_id: payload.staff_id,
+    name: payload.name,
+    ic: payload.ic,
+    bank_name: payload.bank_name,
+    acc_number: payload.acc_number,
+    nick_name: payload.nick_name,
+    type: payload.type,
+    contact: payload.contact,
+    email: payload.email,
+    kwsp_id: payload.kwsp_id,
+    photo: payload.photo,
+    gender: payload.gender
+  };
 
-  const values = [
-    bank_name , acc_number , staff_id
-  ];
+  const entries = Object.entries(updatable).filter(([, value]) => value !== undefined);
+  if (!entries.length) {
+    const err = new Error('No staff fields provided to update');
+    err.status = 400;
+    throw err;
+  }
 
-  const result = await req.app.get('pool').query(
-    query,
-    values
-  );
-  // const res = await req.query(query, values);
-  return result.rows;
+  const setClauses = entries.map(([key], idx) => `${key} = $${idx + 1}`);
+  const values = entries.map(([, value]) => value);
+
+  const whereColumn = payload.no || payload.id || payload.staff_no ? 'no' : 'staff_id';
+  values.push(identifier);
+
+  const query = `UPDATE staff SET ${setClauses.join(', ')} WHERE ${whereColumn} = $${values.length} RETURNING *`;
+  const result = await req.app.get('pool').query(query, values);
+
+  if (result.rowCount === 0) {
+    const err = new Error(`Staff not found for ${whereColumn} ${identifier}`);
+    err.status = 404;
+    throw err;
+  }
+
+  return result.rows[0];
 };
 
 const getStaffById = async (req , staff_id ) => {

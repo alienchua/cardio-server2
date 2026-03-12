@@ -228,6 +228,22 @@ const quickFromBay = async (req , bayId) => {
   return result.rows;
 };
 
+const clearBayStaffByBayId = async (req, bayId) => {
+  const query = `
+  DELETE FROM baycurrent WHERE bay_id = $1 RETURNING *
+  `;
+
+  const values = [
+    bayId
+  ];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
+  return result.rows;
+};
+
 const selectBayByName = async (req , name) => {
 
   const query = `
@@ -244,6 +260,38 @@ const selectBayByName = async (req , name) => {
   );
   // const res = await req.query(query, values);
   return result.rows[0];
+};
+
+const getBayCurrentByStaffId = async (req, staffId) => {
+  const query = `
+  SELECT * FROM baycurrent WHERE staff_id = $1
+  `;
+
+  const values = [
+    staffId
+  ];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
+  return result.rows;
+};
+
+const removeStaffByStaffId = async (req, staffId) => {
+  const query = `
+  DELETE FROM baycurrent WHERE staff_id = $1 RETURNING *
+  `;
+
+  const values = [
+    staffId
+  ];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
+  return result.rows;
 };
 
 const addStaff = async (req , staff_id , bay_id) => {
@@ -329,7 +377,10 @@ module.exports = {
   getBayList,
   getStaffEmptyBay,
   quickFromBay,
+  clearBayStaffByBayId,
   selectBayByName,
+  getBayCurrentByStaffId,
+  removeStaffByStaffId,
   addStaff,
   getBayCheckinList,
   getBayHistoryByDate,

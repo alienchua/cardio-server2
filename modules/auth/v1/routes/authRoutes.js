@@ -42,7 +42,9 @@ const {
   getBayListCtrl,
   getStaffEmptyBayCtrl,
   removeStaff,
+  clearBayStaffCtrl,
   insertStafftoBay,
+  runBayResetCtrl,
   getBayCheckinListCtrl,
   getBayHistoryCtrl } = require('../controllers/bayController');
 const { 
@@ -64,12 +66,15 @@ const {
   getMasterListCtrl,
   getMasterBacklogCountCtrl,
   getTasksBacklogCountCtrl,
+  getTasksStatusNullCountCtrl,
   getDashboardStatsCtrl,
   getLastOpenCafiDateCtrl,
   getMasterDetail,
   taskOffset,
   getTasksListCtrl,
   getTasksListCtrl2,
+  getAchievementListCtrl,
+  getHourlyCompletedStatsCtrl,
   getMasterListCtrl2,
   deleteCheckinStaffCtrl,
   getStandyListToday,
@@ -175,6 +180,9 @@ router.post('/getMasterDetail', getMasterDetail);
 router.post('/taskOffset', taskOffset);
 router.get('/getTasksListCtrl', getTasksListCtrl);
 router.post('/getTasksListCtrl2', getTasksListCtrl2);
+router.get('/getTasksStatusNullCount', getTasksStatusNullCountCtrl);
+router.post('/getAchievementListCtrl', getAchievementListCtrl);
+router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);
 router.post('/getMasterListCtrl2', getMasterListCtrl2);
 router.post('/cancelMasterlistRange', cancelMasterlistRangeCtrl);
 router.post('/deleteCheckinStaffCtrl', deleteCheckinStaffCtrl);
@@ -201,7 +209,9 @@ router.post('/getBayListByType', getBayListByType);
 router.get('/getBayListCtrl', getBayListCtrl);
 router.get('/getStaffEmptyBayCtrl', getStaffEmptyBayCtrl);
 router.post('/removeStaff', removeStaff);
+router.post('/clearBayStaff', clearBayStaffCtrl);
 router.post('/insertStafftoBay', insertStafftoBay);
+router.post('/runBayReset', runBayResetCtrl);
 
 
 
