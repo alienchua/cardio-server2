@@ -25,7 +25,11 @@ const {
   checkCheckinStaff,
   checkCheckinNumber,
   getTasksList2,
+  getTasksStatusNullCount,
   getTasksAnalisys2,
+  getAchievementList,
+  getAchievementAnalysis,
+  getHourlyCompletedStats,
   deleteCheckinStaff,
   getStandyList,
   updatePickup,
@@ -38,6 +42,7 @@ const {
   getCheckINByNo,
   updateReady,
   getFitmentCurrentCheckin,
+  updatePreparing,
   getCollectScreen,
   getCurrentCheckin,
   getBayCurrentCheckin,
@@ -149,13 +154,31 @@ const checkInTask = async (req, res, next) => {
       });
     }
 
+    const fitmentModelCodes = new Set([
+      'GUN125R-DEFSXEQ2',
+      'GUN125R-DETSXEQ3',
+      'GUN125R-BEFLXEQ1',
+      'KDH201R-RBMDYEL3'
+    ]);
+    const modelCodeKey = String(serachMaster.model_code || '').trim().toUpperCase();
+    const effectiveType = fitmentModelCodes.has(modelCodeKey) ? 'FITMENT' : type;
+
+    const newItems = await getTaskbyNoandType(req, serachMaster.no, 'New');
+    
+    if (Array.isArray(newItems) && newItems.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot check in while New task items exist"
+      });
+    }
+
   
-    const checkGotType = await checkType(req, serachMaster.no , type);
+    const checkGotType = await checkType(req, serachMaster.no , effectiveType);
 
     if (!checkGotType) {
       return res.status(400).json({
         success: false,
-        message: "this Task Don't have" + type + ' Item'
+        message: "this Task Don't have" + effectiveType + ' Item'
       });
     }
  
@@ -163,7 +186,7 @@ const checkInTask = async (req, res, next) => {
       
       const checkNumber = await checkCheckinNumber(req, bay_id );
   
-      if (checkNumber.total >= 2) {
+      if (checkNumber.total >= 3) {
         return res.status(400).json({
           success: false,
           message: "This Bay is full"
@@ -174,7 +197,7 @@ const checkInTask = async (req, res, next) => {
     // checkType
 
     
-    const existing = await searchCheckIN(req, serachMaster.no , type);
+    const existing = await searchCheckIN(req, serachMaster.no , effectiveType);
 
     if (existing) {
       return res.status(400).json({
@@ -183,7 +206,8 @@ const checkInTask = async (req, res, next) => {
       });
     }
 
-    const result = await insertCheckIN(req, serachMaster.no , 4 , bay_id , status, type);
+   
+    const result = await insertCheckIN(req, serachMaster.no , 4 , bay_id , status, effectiveType);
 
     const bayStaff = await selectBayStaff(req, bay_id);
 
@@ -194,7 +218,8 @@ const checkInTask = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: "Check In successfully",
-      insertedCount: result.rowCount
+      insertedCount: 1,
+      checkin_no: result.no
     });
 
     broadcastToTopics(
@@ -367,7 +392,7 @@ const getTasksListCtrl = async (req, res, next) => {
 
 const getTasksListCtrl2 = async (req, res, next) => {
 
-  const {  chassis , fitment_id , model , seq , date_from  ,date_to  , type, date_field, page, page_size } = req.body;
+  const {  chassis , fitment_id , fitment_type, model , seq , date_from  ,date_to  , type, date_field, page, page_size } = req.body;
 
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -379,6 +404,7 @@ const getTasksListCtrl2 = async (req, res, next) => {
       fitment_id : fitment_id , 
       model : model , 
       seq : seq, 
+      fitment_type: fitment_type,
       date_from : date_from || today,
       date_to : date_to || date_from || today,
       type : type,
@@ -395,6 +421,45 @@ const getTasksListCtrl2 = async (req, res, next) => {
       message: "Get Check In List successfully",
       data: result,
       analysis :analysis
+    });
+  } catch (error) {
+    next(error);
+  }
+
+};
+
+const getAchievementListCtrl = async (req, res, next) => {
+
+  const { chassis, fitment_id, fitment_type, model, model_code, seq, date_from, date_to, date_field, bay, page, page_size } = req.body;
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const pageNum = Math.max(1, Number(page) || 1);
+    const pageSizeNum = Math.max(1, Math.min(Number(page_size) || 10000, 20000));
+    const offset = (pageNum - 1) * pageSizeNum;
+    const data = {
+      chassis,
+      fitment_id,
+      model,
+      model_code,
+      seq,
+      bay,
+      date_field,
+      fitment_type,
+      date_from: date_from || today,
+      date_to: date_to || date_from || today,
+      limit: pageSizeNum,
+      offset
+    };
+
+    const result = await getAchievementList(req, data);
+    const analysis = await getAchievementAnalysis(req, data);
+
+    res.status(200).json({
+      success: true,
+      message: "Get achievement list successfully",
+      data: result,
+      analysis
     });
   } catch (error) {
     next(error);
@@ -445,6 +510,19 @@ const getLastOpenCafiDateCtrl = async (req, res, next) => {
   }
 };
 
+const getHourlyCompletedStatsCtrl = async (req, res, next) => {
+  try {
+    const result = await getHourlyCompletedStats(req);
+    res.status(200).json({
+      success: true,
+      message: "Get hourly completed stats successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getMasterListCtrl2 = async (req, res, next) => {
   const {  chassis , fitment_id , model , seq , date_from  ,date_to  } = req.body;
 
@@ -478,6 +556,20 @@ const getTasksBacklogCountCtrl = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: "Get task backlog successfully",
+      data: { count }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getTasksStatusNullCountCtrl = async (req, res, next) => {
+  try {
+    const count = await getTasksStatusNullCount(req);
+
+    res.status(200).json({
+      success: true,
+      message: "Get task count successfully",
       data: { count }
     });
   } catch (error) {
@@ -623,10 +715,13 @@ const pickStandby = async (req, res, next) => {
     if(type == 'Ready'){
       console.log('run here')
        result = await updatePickup(req , no);
-    }
+    } 
    else if(type == 'Pending'){
-       result = await updateReady(req , no);
+       result = await updatePreparing(req , no);
     }
+    else if(type == 'Preparing'){
+      result = await  updateReady(req , no);
+   }
     else{
       result = await updatePickupTime(req , no);
     }
@@ -1017,12 +1112,15 @@ module.exports = {
   getMasterListCtrl,
   getMasterBacklogCountCtrl,
   getTasksBacklogCountCtrl,
+  getTasksStatusNullCountCtrl,
   getDashboardStatsCtrl,
   getMasterDetail,
   taskOffset,
   getTasksListCtrl,
   getTasksListCtrl2,
+  getAchievementListCtrl,
   getMasterListCtrl2,
+  getHourlyCompletedStatsCtrl,
   deleteCheckinStaffCtrl,
   getStandyListToday,
   pickStandby,

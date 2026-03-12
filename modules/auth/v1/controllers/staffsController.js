@@ -40,24 +40,44 @@ const insertStaffs = async (req, res, next) => {
 };
 
 const updateStaffBy = async (req, res, next) => {
-  const { data } = req.body;
-  // staffs should be an array of objects with all required fields
-
-  console.log(data)
-
   try {
+    let raw = req.body?.data ?? req.body;
 
-    for (const item of data) {
-
-      await updateStaffBystaff_id(req, item.bank_name, item.acc_number , item.staff_id);
-
+    if (typeof raw === 'string') {
+      try {
+        raw = JSON.parse(raw);
+      } catch (parseErr) {
+        console.error('[updateStaffBy] failed to parse string body:', parseErr);
+      }
     }
-  
+
+    const payload = Array.isArray(raw) ? raw : [raw];
+    const updates = payload.filter((item) => item && typeof item === 'object' && Object.keys(item).length > 0);
+
+    console.log('[updateStaffBy] incoming body type:', typeof req.body, 'raw type:', Array.isArray(raw) ? 'array' : typeof raw);
+    console.log('[updateStaffBy] incoming raw:', JSON.stringify(raw));
+    console.log('[updateStaffBy] normalized updates:', JSON.stringify(updates));
+
+    if (!updates.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'No staff updates provided'
+      });
+    }
+
+    const results = [];
+    for (const item of updates) {
+      const updated = await updateStaffBystaff_id(req, item);
+      results.push(updated);
+    }
+
     res.status(200).json({
       success: true,
-      message: "Staff inserted successfully",
+      message: `Updated ${results.length} staff record${results.length > 1 ? 's' : ''}`,
+      data: Array.isArray(req.body?.data) ? results : results[0]
     });
   } catch (error) {
+    console.error('[updateStaffBy] error:', error?.message, 'stack:', error?.stack, 'body:', req.body);
     next(error);
   }
 };

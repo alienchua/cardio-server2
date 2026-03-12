@@ -40,6 +40,7 @@ const { join } = require('path')
 const { readdirSync, lstatSync } = require('fs')
 const Logger = require('./utils/logUtils.js');
 const logger = new Logger();
+const { resetBayAssignments } = require('./utils/bayReset');
 
 
 
@@ -129,3 +130,31 @@ server.listen(PORT, () => {
   logger.log(i18next.t('Please login', { what: 'i18next', how: 'not great', lng: 'de' }), 'info')
   logger.log(`Server running on port ${PORT}`, 'info');
 });
+
+const resetBayAssignmentsJob = async () => {
+  try {
+    const result = await resetBayAssignments(pool);
+    logger.log(
+      `Daily bay reset completed (cleared ${result.cleared}, inserted ${result.inserted})`,
+      'info'
+    );
+  } catch (error) {
+    logger.log(`Daily bay reset failed: ${error?.message || error}`, 'error');
+  }
+};
+
+const scheduleDailyBayReset = () => {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(6, 0, 0, 0);
+  if (next <= now) {
+    next.setDate(next.getDate() + 1);
+  }
+  const delayMs = next.getTime() - now.getTime();
+  setTimeout(() => {
+    resetBayAssignmentsJob();
+    setInterval(resetBayAssignmentsJob, 24 * 60 * 60 * 1000);
+  }, delayMs);
+};
+
+scheduleDailyBayReset();

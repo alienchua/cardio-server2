@@ -143,8 +143,21 @@ const getNewAccessoryByNo = async (req,  no) => {
 
 const getAccessoryGroup = async (req,  no) => {
 
-  const result = await req.app.get('pool').query(`SELECT model_code , model , model_description  , count(*) as total_products FROM accessories
-GROUP BY model_code , model , model_description `);
+  const result = await req.app.get('pool').query(`
+SELECT
+      model_code,
+      model,
+      model_description,
+      COUNT(*) AS total_products,
+      COALESCE(SUM(duration) FILTER (WHERE type = 'FITMENT'), 0) AS fitment_duration,
+      COALESCE(SUM(duration) FILTER (WHERE type = 'HOIST'), 0) AS hoist_duration,
+	  COALESCE(SUM(price) FILTER (WHERE type = 'FITMENT'), 0) AS fitment_price,
+      COALESCE(SUM(price) FILTER (WHERE type = 'HOIST'), 0) AS hoist_price,
+      COUNT(*) FILTER (WHERE type = 'FITMENT') AS fitment_count,
+      COUNT(*) FILTER (WHERE type = 'HOIST') AS hoist_count
+    FROM accessories
+    GROUP BY model_code, model, model_description
+  `);
   return result.rows;
 };
 
