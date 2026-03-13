@@ -26,7 +26,6 @@ const {
   checkCheckinNumber,
   getTasksList2,
   getTasksStatusNullCount,
-  getTasksAnalisys2,
   getAchievementList,
   getAchievementAnalysis,
   getHourlyCompletedStats,
@@ -415,10 +414,35 @@ const getTasksListCtrl2 = async (req, res, next) => {
     }
 
     const { rows, total } = await getTasksList2(req , data);
+
     const shouldIncludeAnalysis = include_analysis !== false && include_analysis !== 'false';
-    const analysis = shouldIncludeAnalysis
-      ? await getTasksAnalisys2(req , { ...data, status: undefined })
-      : [];
+    let analysis = [];
+
+    if (shouldIncludeAnalysis) {
+      // Build summary from all filtered rows (ignore status filter + ignore pagination).
+      const summaryData = {
+        ...data,
+        status: undefined,
+        no_pagination: true,
+        skip_count: true
+      };
+      const { rows: summaryRows } = await getTasksList2(req, summaryData);
+      const summary = (summaryRows || []).reduce(
+        (acc, row) => {
+          if (row?.status === 'Check-Out') acc.completed += 1;
+          else if (row?.status === 'Check-In') acc.working += 1;
+          else acc.pending += 1;
+          return acc;
+        },
+        { completed: 0, working: 0, pending: 0 }
+      );
+
+      analysis = [
+        { status: 'Check-Out', count: summary.completed },
+        { status: 'Check-In', count: summary.working },
+        { status: null, count: summary.pending }
+      ];
+    }
 
     res.status(200).json({
       success: true,
