@@ -66,7 +66,7 @@ const insertCheckIN = async (req, masterlist_id, action_by, bay_id, status, type
     VALUES ($1, $2, $3, $4, $5, 'Pending', $6, $6)
     RETURNING *
   `;
-  values = [masterlist_id, action_by, bay_id, 'Check-Out', type, new Date(), new Date()];
+  values = [masterlist_id, action_by, bay_id, 'Check-Out', type, new Date(),];
 
   }
   else if (type === 'FITMENT') {
@@ -493,7 +493,7 @@ LEFT JOIN checkin c
 LEFT JOIN bay b 
   ON b.no = c.bay_id
 WHERE c.checkin_time IS NULL
-  AND m.cafi_date > DATE '2026-01-01' AND m.cancel_time is null
+  AND m.cafi_date > DATE '2026-02-01' AND m.cancel_time is null
 
   `;
 
@@ -842,23 +842,30 @@ LEFT JOIN task_item t
 
 const getTasksStatusNullCount = async (req) => {
   const query = `
-    SELECT COUNT(DISTINCT m.no)::int AS count
-    FROM masterlist m 
-    LEFT JOIN (
-      SELECT 
-        TRIM(type) AS type, 
-        masterlist_id 
-      FROM task_item 
-      WHERE TRIM(type) IN ('FITMENT', 'HOIST')
-      GROUP BY TRIM(type), masterlist_id 
-    ) m2 ON m2.masterlist_id = m.no
-    LEFT JOIN checkin c 
-      ON m.no = c.masterlist_id 
-      AND c.type = m2.type
-    WHERE m.cancel_time IS NULL
-      AND m.cafi_date::date > DATE '2026-01-01'
-      AND m.cafi_date::date < CURRENT_DATE
-      AND c.status IS NULL
+   SELECT COUNT(DISTINCT m.no)::int AS count
+FROM masterlist m 
+LEFT JOIN (
+  SELECT 
+    TRIM(type) AS type, 
+    masterlist_id 
+  FROM task_item 
+  WHERE TRIM(type) IN ('FITMENT', 'HOIST')
+  GROUP BY TRIM(type), masterlist_id 
+) m2 ON m2.masterlist_id = m.no
+
+LEFT JOIN checkin c 
+  ON m.no = c.masterlist_id 
+  AND c.type = m2.type
+
+LEFT JOIN bay b 
+  ON b.no = c.bay_id
+
+WHERE c.checkin_time IS NULL 
+  AND m.status = 'Active'
+  AND m.cafi_date > DATE '2026-02-01'
+  AND m.cafi_date < CURRENT_DATE
+  AND m.cancel_time IS NULL
+  AND m.no not IN (1306193, 2594130)
   `;
 
   const result = await req.app.get('pool').query(query);
