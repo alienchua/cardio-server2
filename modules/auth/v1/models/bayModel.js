@@ -262,6 +262,25 @@ const selectBayByName = async (req , name) => {
   return result.rows[0];
 };
 
+const getBayStaffDetailByBayId = async (req, bay_id) => {
+  const query = `
+    SELECT
+      s.no,
+      s.name,
+      s.nick_name,
+      s.type
+    FROM baycurrent bc
+    LEFT JOIN staff s ON s.no = bc.staff_id
+    WHERE bc.bay_id = $1
+    ORDER BY s.nick_name, s.name, s.no
+  `;
+
+  const values = [bay_id];
+
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows;
+};
+
 const getBayCurrentByStaffId = async (req, staffId) => {
   const query = `
   SELECT * FROM baycurrent WHERE staff_id = $1
@@ -379,6 +398,7 @@ module.exports = {
   quickFromBay,
   clearBayStaffByBayId,
   selectBayByName,
+  getBayStaffDetailByBayId,
   getBayCurrentByStaffId,
   removeStaffByStaffId,
   addStaff,

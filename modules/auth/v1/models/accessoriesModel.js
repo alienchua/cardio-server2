@@ -131,7 +131,15 @@ WHERE no = $6 RETURNING *`, [ price, duration, type, full_name , short_name , no
 
 const getNewAccessory = async (req,  data) => {
   console.log(data)
-  const result = await req.app.get('pool').query(`SELECT * FROM accessories WHERE type = 'New'`, []);
+  const result = await req.app.get('pool').query(`
+    SELECT *
+    FROM accessories
+    WHERE type = 'New'
+       OR price IS NULL
+       OR duration IS NULL
+       OR full_name IS NULL
+       OR short_name IS NULL
+  `, []);
   return result.rows;
 };
 

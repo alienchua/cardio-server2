@@ -83,13 +83,25 @@ const getAdminWithId = async (req, res, next) => {
 
 const updateAdminById = async (req, res, next) => {
   try {
-    const { id, username, email, phone, role } = req.body;
+    const { id, username, email, phone, role, password } = req.body;
 
     if (!id) {
       return res.status(400).json({ success: false, message: 'Admin id is required' });
     }
     if (!username) {
       return res.status(400).json({ success: false, message: 'Username is required' });
+    }
+    if (password && String(req.user?.role || '').toLowerCase() !== 'superadmin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only superadmin can change password'
+      });
+    }
+    if (password && String(password).length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters long'
+      });
     }
 
     const existing = await getAdminById(req, id);
@@ -113,12 +125,15 @@ const updateAdminById = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Phone already exists' });
     }
 
+    const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
+
     const updated = await updateAdmin(req, {
       id,
       username,
       email,
       phone,
-      role: role || existing.role
+      role: role || existing.role,
+      hashedPassword
     });
 
     res.status(200).json({

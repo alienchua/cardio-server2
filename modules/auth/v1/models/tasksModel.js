@@ -161,6 +161,66 @@ const searchMasterlistByno = async (req,  no ) => {
   return result.rows[0];
 };
 
+const findMasterlistByChassisFitment = async (req, chassis, fitment_id) => {
+  const query = `
+    SELECT *
+    FROM masterlist
+    WHERE chassis = $1 AND fitment_id = $2
+    LIMIT 1
+  `;
+
+  const values = [chassis, fitment_id];
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows[0];
+};
+
+const updateMasterlistAccessoryFields = async (req, masterlist_id, data) => {
+  const query = `
+    UPDATE masterlist
+    SET accessories_std = $1,
+        accessories_otp = $2,
+        accessories_full = $3
+    WHERE no = $4
+    RETURNING *
+  `;
+
+  const values = [
+    data.accessories_std || null,
+    data.accessories_otp || null,
+    data.accessories_full || null,
+    masterlist_id
+  ];
+
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows[0];
+};
+
+const findTaskItemByMasterAccessory = async (req, masterlist_id, accessories_id) => {
+  const query = `
+    SELECT *
+    FROM task_item
+    WHERE masterlist_id = $1 AND accessories_id = $2
+    LIMIT 1
+  `;
+
+  const values = [masterlist_id, accessories_id];
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows[0];
+};
+
+const updateMasterlistRemark = async (req, masterlist_id, remark) => {
+  const query = `
+    UPDATE masterlist
+    SET remark = $1
+    WHERE no = $2
+    RETURNING *
+  `;
+
+  const values = [remark, masterlist_id];
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows[0];
+};
+
 const findMasterByChassisSeq = async (req, chassis, seq) => {
   const query = `SELECT * FROM masterlist WHERE chassis = $1 AND seq = $2 LIMIT 1`;
 
@@ -218,6 +278,212 @@ const insertManualCheckIn = async (req, payload) => {
 
   const result = await req.app.get('pool').query(query, values);
   return result.rows[0];
+};
+
+const createManualTaskCheckin = async (req, payload) => {
+  const {
+    masterlist_id,
+    action_by,
+    bay_id,
+    type,
+    checkin_time,
+    checkout_time,
+    remark,
+    staff_ids = []
+  } = payload;
+
+  const client = await req.app.get('pool').connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const insertCheckinQuery = `
+      INSERT INTO checkin (
+        masterlist_id,
+        action_by,
+        bay_id,
+        status,
+        type,
+        accessory_status,
+        checkin_time,
+        checkout_time,
+        remark
+      )
+      VALUES ($1, $2, $3, 'Check-Out', $4, 'Pending', $5, $6, $7)
+      RETURNING *
+    `;
+
+    const insertCheckinValues = [
+      masterlist_id,
+      action_by,
+      bay_id,
+      type,
+      checkin_time,
+      checkout_time,
+      remark || null
+    ];
+
+    const checkinResult = await client.query(insertCheckinQuery, insertCheckinValues);
+    const checkin = checkinResult.rows[0];
+
+    const normalizedStaffIds = Array.from(
+      new Set((staff_ids || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))
+    );
+
+    let insertedStaff = [];
+    if (normalizedStaffIds.length > 0) {
+      const insertStaffQuery = `
+        INSERT INTO checkin_staff (checkin_id, staff_id, position)
+        SELECT $1, s.no, s.type
+        FROM staff s
+        WHERE s.no = ANY($2::int[])
+        RETURNING *
+      `;
+      const insertStaffResult = await client.query(insertStaffQuery, [checkin.no, normalizedStaffIds]);
+      insertedStaff = insertStaffResult.rows;
+
+      if (insertedStaff.length !== normalizedStaffIds.length) {
+        const err = new Error('Some selected staff were not found');
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      checkin,
+      staff: insertedStaff
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const upsertManualTaskCheckin = async (req, payload) => {
+  const {
+    existing_checkin_id,
+    masterlist_id,
+    action_by,
+    bay_id,
+    type,
+    checkin_time,
+    checkout_time,
+    remark,
+    staff_ids = []
+  } = payload;
+
+  const client = await req.app.get('pool').connect();
+
+  try {
+    await client.query('BEGIN');
+
+    let checkin;
+
+    if (existing_checkin_id) {
+      const updateCheckinQuery = `
+        UPDATE checkin
+        SET bay_id = $2,
+            status = 'Check-Out',
+            type = $3,
+            action_by = $4,
+            accessory_status = 'Pending',
+            checkin_time = $5,
+            checkout_time = $6,
+            remark = $7
+        WHERE no = $1
+        RETURNING *
+      `;
+
+      const updateCheckinValues = [
+        existing_checkin_id,
+        bay_id,
+        type,
+        action_by,
+        checkin_time,
+        checkout_time,
+        remark || null
+      ];
+
+      const updateCheckinResult = await client.query(updateCheckinQuery, updateCheckinValues);
+
+      if (updateCheckinResult.rowCount === 0) {
+        const err = new Error('Check-in record not found');
+        err.status = 404;
+        throw err;
+      }
+
+      checkin = updateCheckinResult.rows[0];
+      await client.query(`DELETE FROM checkin_staff WHERE checkin_id = $1`, [existing_checkin_id]);
+    } else {
+      const insertCheckinQuery = `
+        INSERT INTO checkin (
+          masterlist_id,
+          action_by,
+          bay_id,
+          status,
+          type,
+          accessory_status,
+          checkin_time,
+          checkout_time,
+          remark
+        )
+        VALUES ($1, $2, $3, 'Check-Out', $4, 'Pending', $5, $6, $7)
+        RETURNING *
+      `;
+
+      const insertCheckinValues = [
+        masterlist_id,
+        action_by,
+        bay_id,
+        type,
+        checkin_time,
+        checkout_time,
+        remark || null
+      ];
+
+      const checkinResult = await client.query(insertCheckinQuery, insertCheckinValues);
+      checkin = checkinResult.rows[0];
+    }
+
+    const normalizedStaffIds = Array.from(
+      new Set((staff_ids || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))
+    );
+
+    let insertedStaff = [];
+    if (normalizedStaffIds.length > 0) {
+      const insertStaffQuery = `
+        INSERT INTO checkin_staff (checkin_id, staff_id, position)
+        SELECT $1, s.no, s.type
+        FROM staff s
+        WHERE s.no = ANY($2::int[])
+        RETURNING *
+      `;
+      const insertStaffResult = await client.query(insertStaffQuery, [checkin.no, normalizedStaffIds]);
+      insertedStaff = insertStaffResult.rows;
+
+      if (insertedStaff.length !== normalizedStaffIds.length) {
+        const err = new Error('Some selected staff were not found');
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      checkin,
+      staff: insertedStaff
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 const insertCheckInStaff = async (req, checkin_id, staff_id , position) => {
@@ -291,6 +557,140 @@ const updateCheckInNew = async (req, no , bay_id ) => {
   return result.rows[0];
 };
 
+const changeCheckinBayAndStaff = async (req, { checkin_id, bay_id, staff_ids = [] }) => {
+  const client = await req.app.get('pool').connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const updateQuery = `
+      UPDATE checkin
+      SET bay_id = $2
+      WHERE no = $1
+      RETURNING *
+    `;
+    const updateResult = await client.query(updateQuery, [checkin_id, bay_id]);
+
+    if (updateResult.rowCount === 0) {
+      const err = new Error('Check-in record not found');
+      err.status = 404;
+      throw err;
+    }
+
+    await client.query(`DELETE FROM checkin_staff WHERE checkin_id = $1`, [checkin_id]);
+
+    const normalizedStaffIds = Array.from(
+      new Set((staff_ids || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))
+    );
+
+    let insertedStaff = [];
+    if (normalizedStaffIds.length > 0) {
+      const insertQuery = `
+        INSERT INTO checkin_staff (checkin_id, staff_id, position)
+        SELECT $1, s.no, s.type
+        FROM staff s
+        WHERE s.no = ANY($2::int[])
+        RETURNING *
+      `;
+      const insertResult = await client.query(insertQuery, [checkin_id, normalizedStaffIds]);
+      insertedStaff = insertResult.rows;
+
+      if (insertedStaff.length !== normalizedStaffIds.length) {
+        const err = new Error('Some selected staff were not found');
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      checkin: updateResult.rows[0],
+      staff: insertedStaff
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const cancelCheckinWithArchive = async (req, { checkin_id, action_by, remark }) => {
+  const client = await req.app.get('pool').connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const archiveQuery = `
+      INSERT INTO cencellcheckin (
+        masterlist_id,
+        action_by,
+        checkin_id,
+        bay_id,
+        status,
+        created_at,
+        checkout_time,
+        remark,
+        type,
+        checkin_time,
+        accessory_status,
+        accessory_pickup,
+        showaccessories,
+        preparing_time
+      )
+      SELECT
+        masterlist_id,
+        $2,
+        no,
+        bay_id,
+        status,
+        created_at,
+        checkout_time,
+        $3,
+        type,
+        checkin_time,
+        accessory_status,
+        accessory_pickup,
+        showaccessories,
+        preparing_time
+      FROM checkin
+      WHERE no = $1
+      RETURNING *
+    `;
+
+    const archiveResult = await client.query(archiveQuery, [checkin_id, action_by, remark]);
+
+    if (archiveResult.rowCount === 0) {
+      const err = new Error('Check-in record not found');
+      err.status = 404;
+      throw err;
+    }
+
+    await client.query(`DELETE FROM checkin_staff WHERE checkin_id = $1`, [checkin_id]);
+
+    const deleteResult = await client.query(`DELETE FROM checkin WHERE no = $1 RETURNING *`, [checkin_id]);
+
+    if (deleteResult.rowCount === 0) {
+      const err = new Error('Failed to delete check-in record');
+      err.status = 500;
+      throw err;
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      archived: archiveResult.rows[0],
+      deleted: deleteResult.rows[0]
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 const updateCheckInRemark = async (req,  masterlist_id , type , remark ) => {
 
   // console.log( remark ,  masterlist_id , type)
@@ -306,6 +706,22 @@ const updateCheckInRemark = async (req,  masterlist_id , type , remark ) => {
     values
   );
   // const res = await req.query(query, values);
+  return result.rows[0];
+};
+
+const resetCheckinToStandby = async (req, checkin_id) => {
+  const query = `
+    UPDATE checkin
+    SET status = 'Standby',
+        checkin_time = NULL,
+        checkout_time = NULL
+    WHERE no = $1
+    RETURNING *
+  `;
+
+  const values = [checkin_id];
+
+  const result = await req.app.get('pool').query(query, values);
   return result.rows[0];
 };
 
@@ -704,12 +1120,21 @@ const getTasksList2 = async (req, data) => {
   // Type (task_item)
   if (data.type && data.type !== 'All') addJoin((p) => `m2.type = ${p[0]}`, [data.type]);
 
+  // Bay name (joined bay table)
+  if (data.bay) addJoin((p) => `COALESCE(b.name, '') ILIKE ${p[0]}`, [`%${data.bay}%`]);
+
   // Date range
   const today = new Date().toISOString().slice(0, 10);
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
   const dateField = data.date_field === 'checkin' ? 'c.checkin_time' : 'm.cafi_date';
-  if (dateField === 'c.checkin_time') {
+  if (data.backlog_only) {
+    masterFilters.push(`status = 'Active'`);
+    masterFilters.push(`cafi_date > DATE '2026-02-01'`);
+    masterFilters.push(`cafi_date < CURRENT_DATE`);
+    masterFilters.push(`no NOT IN (1306193, 2594130)`);
+    joinFilters.push(`c.checkin_time IS NULL`);
+  } else if (dateField === 'c.checkin_time') {
     addJoin((p) => `${dateField}::date BETWEEN ${p[0]}::date AND ${p[1]}::date`, [dateFrom, dateTo]);
   } else {
     addMaster((p) => `cafi_date::date BETWEEN ${p[0]}::date AND ${p[1]}::date`, [dateFrom, dateTo]);
@@ -840,9 +1265,108 @@ LEFT JOIN task_item t
   return result.rows;
 };
 
+const getCancelledCheckinList = async (req, data) => {
+  const filters = [`m.cancel_time IS NULL`];
+  const values = [];
+  let paramIndex = 1;
+
+  const addFilter = (condition, vals = []) => {
+    const placeholders = vals.map(() => `$${paramIndex++}`);
+    filters.push(condition(placeholders));
+    values.push(...vals);
+  };
+
+  if (data.chassis) addFilter((p) => `m.chassis ILIKE ${p[0]}`, [`%${data.chassis}%`]);
+  if (data.fitment_id) addFilter((p) => `m.fitment_id ILIKE ${p[0]}`, [`%${data.fitment_id}%`]);
+  if (data.model) addFilter((p) => `m.model_description ILIKE ${p[0]}`, [`%${data.model}%`]);
+  if (data.seq) addFilter((p) => `m.seq = ${p[0]}`, [Number(data.seq)]);
+  if (data.bay) addFilter((p) => `COALESCE(b.name, '') ILIKE ${p[0]}`, [`%${data.bay}%`]);
+
+  if (Array.isArray(data.fitment_type) && data.fitment_type.length > 0) {
+    addFilter(
+      (p) => `SUBSTRING(m.fitment_id FROM 1 FOR 1) IN (${p.join(', ')})`,
+      data.fitment_type
+    );
+  } else if (!Array.isArray(data.fitment_type) && data.fitment_type && data.fitment_type !== 'All') {
+    addFilter((p) => `SUBSTRING(m.fitment_id FROM 1 FOR 1) = ${p[0]}`, [data.fitment_type]);
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const dateFrom = data.date_from || today;
+  const dateTo = data.date_to || dateFrom;
+  const dateField = data.date_field === 'checkin' ? 'cc.checkin_time' : 'm.cafi_date';
+  addFilter((p) => `${dateField}::date BETWEEN ${p[0]}::date AND ${p[1]}::date`, [dateFrom, dateTo]);
+
+  const query = `
+    SELECT
+      cc.no,
+      cc.checkin_id,
+      cc.status,
+      cc.checkin_time,
+      cc.checkout_time,
+      cc.created_at AS cancelled_at,
+      cc.remark,
+      cc.type,
+      m.no AS masterlist_no,
+      m.model_code,
+      m.chassis,
+      m.model_description,
+      m.seq,
+      m.fitment_id,
+      m.accessories_otp,
+      SUBSTRING(m.fitment_id FROM 1 FOR 1) AS fitment_type,
+      m.colour,
+      to_char(DATE(m.cafi_date), 'YYYY-MM-DD') AS cafi_date,
+      to_char(DATE(m.caout_date), 'YYYY-MM-DD') AS caout_date,
+      m.accessories_std,
+      b.name AS bay_name,
+      COALESCE(SUM(t.price), 0) AS total,
+      COALESCE(SUM(t.duration), 0) AS duration,
+      (
+        SELECT json_agg(json_build_object('short_name', ti.short_name))
+        FROM task_item ti
+        WHERE ti.masterlist_id = m.no
+          AND ti.type = cc.type
+      ) AS accessories
+    FROM cencellcheckin cc
+    LEFT JOIN masterlist m ON m.no = cc.masterlist_id
+    LEFT JOIN bay b ON b.no = cc.bay_id
+    LEFT JOIN task_item t ON t.masterlist_id = m.no AND t.type = cc.type
+    WHERE ${filters.join(' AND ')}
+    GROUP BY
+      cc.no,
+      cc.checkin_id,
+      cc.status,
+      cc.checkin_time,
+      cc.checkout_time,
+      cc.created_at,
+      cc.remark,
+      cc.type,
+      m.no,
+      m.model_code,
+      m.chassis,
+      m.model_description,
+      m.seq,
+      m.fitment_id,
+      m.accessories_otp,
+      m.colour,
+      m.cafi_date,
+      m.caout_date,
+      m.accessories_std,
+      b.name
+    ORDER BY cc.created_at DESC, cc.no DESC
+    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+  `;
+
+  values.push(Number(data.limit) || 10000, Number(data.offset) || 0);
+
+  const result = await req.app.get('pool').query(query, values);
+  return result.rows;
+};
+
 const getTasksStatusNullCount = async (req) => {
   const query = `
-   SELECT COUNT(DISTINCT m.no)::int AS count
+    SELECT COUNT(DISTINCT m.no)::int AS count
 FROM masterlist m 
 LEFT JOIN (
   SELECT 
@@ -865,7 +1389,7 @@ WHERE c.checkin_time IS NULL
   AND m.cafi_date > DATE '2026-02-01'
   AND m.cafi_date < CURRENT_DATE
   AND m.cancel_time IS NULL
-  AND m.no not IN (1306193, 2594130)
+  AND m.no not IN (1306193, 2594130) AND m2.type IS NOT NULL
   `;
 
   const result = await req.app.get('pool').query(query);
@@ -877,6 +1401,27 @@ const getAchievementList = async (req, data) => {
   const values = [];
   const havingFilters = [];
   let i = 1;
+  const finalCompletionExpr = `
+    CASE
+      WHEN MAX(CASE WHEN t.type = 'FITMENT' THEN 1 ELSE 0 END) = 1
+        AND MAX(CASE WHEN c.type = 'FITMENT' THEN c.checkout_time END) IS NULL
+      THEN NULL
+      WHEN MAX(CASE WHEN t.type = 'HOIST' THEN 1 ELSE 0 END) = 1
+        AND MAX(CASE WHEN c.type = 'HOIST' THEN c.checkout_time END) IS NULL
+      THEN NULL
+      WHEN MAX(CASE WHEN t.type = 'FITMENT' THEN 1 ELSE 0 END) = 1
+        AND MAX(CASE WHEN t.type = 'HOIST' THEN 1 ELSE 0 END) = 1
+      THEN GREATEST(
+        MAX(CASE WHEN c.type = 'FITMENT' THEN c.checkout_time END),
+        MAX(CASE WHEN c.type = 'HOIST' THEN c.checkout_time END)
+      )
+      WHEN MAX(CASE WHEN t.type = 'FITMENT' THEN 1 ELSE 0 END) = 1
+      THEN MAX(CASE WHEN c.type = 'FITMENT' THEN c.checkout_time END)
+      WHEN MAX(CASE WHEN t.type = 'HOIST' THEN 1 ELSE 0 END) = 1
+      THEN MAX(CASE WHEN c.type = 'HOIST' THEN c.checkout_time END)
+      ELSE NULL
+    END
+  `;
 
   if (data.chassis) {
     filters.push(`m.chassis ILIKE $${i++}`);
@@ -916,7 +1461,11 @@ const getAchievementList = async (req, data) => {
   const today = new Date().toISOString().slice(0, 10);
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
-  const dateField = data.date_field === 'checkin' ? 'checkin' : 'cafi';
+  const dateField = data.date_field === 'checkin'
+    ? 'checkin'
+    : data.date_field === 'checkout'
+      ? 'checkout'
+      : 'cafi';
   if (dateField === 'checkin') {
     filters.push(`
       EXISTS (
@@ -927,6 +1476,8 @@ const getAchievementList = async (req, data) => {
           AND c2.checkin_time::date BETWEEN $${i}::date AND $${i + 1}::date
       )
     `);
+  } else if (dateField === 'checkout') {
+    havingFilters.push(`(${finalCompletionExpr})::date BETWEEN $${i}::date AND $${i + 1}::date`);
   } else {
     filters.push(`m.cafi_date::date BETWEEN $${i}::date AND $${i + 1}::date`);
   }
@@ -960,6 +1511,7 @@ const getAchievementList = async (req, data) => {
       MAX(CASE WHEN c.type = 'HOIST' THEN c.checkin_time END) AS checkin_time_hoist,
       MAX(CASE WHEN c.type = 'FITMENT' THEN c.checkout_time END) AS checkout_time_fitment,
       MAX(CASE WHEN c.type = 'HOIST' THEN c.checkout_time END) AS checkout_time_hoist,
+      ${finalCompletionExpr} AS checkout_time,
       MAX(CASE WHEN b.type = 'FITMENT' THEN b.name END) AS bay_fitment,
       MAX(CASE WHEN b.type = 'HOIST' THEN b.name END) AS bay_hoist
     FROM masterlist m
@@ -1009,6 +1561,27 @@ const getAchievementAnalysis = async (req, data) => {
   const values = [];
   const havingFilters = [];
   let i = 1;
+  const finalCompletionExpr = `
+    CASE
+      WHEN MAX(CASE WHEN t.type = 'FITMENT' THEN 1 ELSE 0 END) = 1
+        AND MAX(CASE WHEN c.type = 'FITMENT' THEN c.checkout_time END) IS NULL
+      THEN NULL
+      WHEN MAX(CASE WHEN t.type = 'HOIST' THEN 1 ELSE 0 END) = 1
+        AND MAX(CASE WHEN c.type = 'HOIST' THEN c.checkout_time END) IS NULL
+      THEN NULL
+      WHEN MAX(CASE WHEN t.type = 'FITMENT' THEN 1 ELSE 0 END) = 1
+        AND MAX(CASE WHEN t.type = 'HOIST' THEN 1 ELSE 0 END) = 1
+      THEN GREATEST(
+        MAX(CASE WHEN c.type = 'FITMENT' THEN c.checkout_time END),
+        MAX(CASE WHEN c.type = 'HOIST' THEN c.checkout_time END)
+      )
+      WHEN MAX(CASE WHEN t.type = 'FITMENT' THEN 1 ELSE 0 END) = 1
+      THEN MAX(CASE WHEN c.type = 'FITMENT' THEN c.checkout_time END)
+      WHEN MAX(CASE WHEN t.type = 'HOIST' THEN 1 ELSE 0 END) = 1
+      THEN MAX(CASE WHEN c.type = 'HOIST' THEN c.checkout_time END)
+      ELSE NULL
+    END
+  `;
 
   if (data.chassis) {
     filters.push(`m.chassis ILIKE $${i++}`);
@@ -1038,7 +1611,11 @@ const getAchievementAnalysis = async (req, data) => {
   const today = new Date().toISOString().slice(0, 10);
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
-  const dateField = data.date_field === 'checkin' ? 'checkin' : 'cafi';
+  const dateField = data.date_field === 'checkin'
+    ? 'checkin'
+    : data.date_field === 'checkout'
+      ? 'checkout'
+      : 'cafi';
   if (dateField === 'checkin') {
     filters.push(`
       EXISTS (
@@ -1049,6 +1626,8 @@ const getAchievementAnalysis = async (req, data) => {
           AND c2.checkin_time::date BETWEEN $${i}::date AND $${i + 1}::date
       )
     `);
+  } else if (dateField === 'checkout') {
+    havingFilters.push(`(${finalCompletionExpr})::date BETWEEN $${i}::date AND $${i + 1}::date`);
   } else {
     filters.push(`m.cafi_date::date BETWEEN $${i}::date AND $${i + 1}::date`);
   }
@@ -1624,6 +2203,57 @@ ORDER BY
   return result.rows
 };
 
+const getStockCheckList = async (req , type ) => {
+
+  const query = `
+ SELECT 
+    m.chassis, 
+    m.fitment_id,
+    c.type,
+    c.created_at,
+    b.name,
+    c.status,
+    m.colour,
+    m.model_description,
+    c.status,
+    m.seq,
+    c.no,
+    c.accessory_status,
+    c.accessory_pickup,
+    c.accessories,
+    c.preparing_time,
+    c.checking
+FROM checkin c
+LEFT JOIN masterlist m 
+    ON m.no = c.masterlist_id
+LEFT JOIN bay b 
+    ON b.no = c.bay_id
+LEFT JOIN specialacc s 
+    ON m.model_code = s.model_code 
+    AND m.model_description = s.model_description 
+    AND m.colour = s.color_code
+WHERE 
+(    (
+        c.type = 'FITMENT' AND    $1 = 'FITMENT'
+    )
+    OR (
+        c.type = 'HOIST' AND    $1 = 'HOIST'
+        AND s.model_code IS NOT NULL
+    )) AND accessory_status != 'Completed'
+    AND c.checking IS NULL
+ORDER BY 
+    c.no ASC;
+  `;
+  const values = [type];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
+  // const res = await req.query(query, values);
+  return result.rows
+};
+
 const updatePickup = async (req, no) => {
 
   const query = `UPDATE checkin SET  accessory_pickup = $1 , accessory_status = 'Completed' WHERE no = $2 RETURNING *`;
@@ -1653,6 +2283,21 @@ const updateReady = async (req, no) => {
     values
   );
   // const res = await req.query(query, values);
+  return result.rows[0];
+};
+
+const updateCheckingTime = async (req, no) => {
+
+  const query = `UPDATE checkin SET checking = $1 WHERE no = $2 RETURNING *`;
+
+  const values = [
+    new Date(), no
+  ];
+
+  const result = await req.app.get('pool').query(
+    query,
+    values
+  );
   return result.rows[0];
 };
 
@@ -1924,7 +2569,7 @@ LEFT JOIN LATERAL (
     LEFT JOIN masterlist m ON m.no = c.masterlist_id
     WHERE c.bay_id = b.no 
       AND c.status = 'Check-In' AND c.checkin_time is NULL
-    ORDER BY c.checkin_time ASC
+    ORDER BY c.created_at ASC
     LIMIT 1
 ) AS first_checkin ON TRUE
 
@@ -1985,7 +2630,7 @@ SELECT
 FROM bay b
 LEFT JOIN checkin c ON c.bay_id = b.no
 LEFT JOIN masterlist m ON m.no = c.masterlist_id
-LEFT JOIN task_item t ON t.masterlist_id = m.no
+LEFT JOIN task_item t ON t.masterlist_id = m.no AND t.type = c.type
 
 
 WHERE b.name = $1 AND c.status != 'Check-Out' AND c.status != 'Standby'
@@ -2001,7 +2646,7 @@ GROUP BY
     c.type,
     m.no ,
     m.accessories_otp , 
-      m.accessories_std
+    m.accessories_std
       `;
 
   const values = [ bay ];
@@ -2310,11 +2955,13 @@ module.exports = {
   checkCheckinStaff,
   checkCheckinNumber,
   getTasksList2,
+  getCancelledCheckinList,
   getTasksStatusNullCount,
   getTasksAnalisys2,
   getMasterList2,
   deleteCheckinStaff,
   getStandyList,
+  getStockCheckList,
   updatePickup,
   getPickUpList,
   updatePickupTime,
@@ -2322,19 +2969,29 @@ module.exports = {
   updateCheckInRemark,
   getStandbyList,
   updateCheckInNew,
+  changeCheckinBayAndStaff,
+  cancelCheckinWithArchive,
   getCheckINByNo,
+  resetCheckinToStandby,
   getAchievementList,
   getAchievementAnalysis,
   getHourlyCompletedStats,
   getFitmentCurrentCheckin,
   updateReady,
+  updateCheckingTime,
   getCollectScreen,
   getCurrentCheckin,
   getBayCurrentCheckin,
   searchMasterlistByno,
+  findMasterlistByChassisFitment,
+  updateMasterlistAccessoryFields,
+  findTaskItemByMasterAccessory,
+  updateMasterlistRemark,
   findMasterByChassisSeq,
   findStaffNosByStaffIds,
   insertManualCheckIn,
+  createManualTaskCheckin,
+  upsertManualTaskCheckin,
   getTaskbyNoandType,
   getCheckinByNoandType,
   getCheckinByNo,

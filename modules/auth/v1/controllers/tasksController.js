@@ -25,6 +25,7 @@ const {
   checkCheckinStaff,
   checkCheckinNumber,
   getTasksList2,
+  getCancelledCheckinList,
   getTasksStatusNullCount,
   getTasksAnalisys2,
   getAchievementList,
@@ -32,6 +33,7 @@ const {
   getHourlyCompletedStats,
   deleteCheckinStaff,
   getStandyList,
+  getStockCheckList,
   updatePickup,
   getPickUpList,
   updatePickupTime,
@@ -39,17 +41,26 @@ const {
   updateCheckInRemark,
   getStandbyList,
   updateCheckInNew,
+  changeCheckinBayAndStaff,
+  cancelCheckinWithArchive,
   getCheckINByNo,
+  resetCheckinToStandby,
   updateReady,
+  updateCheckingTime,
   getFitmentCurrentCheckin,
   updatePreparing,
   getCollectScreen,
   getCurrentCheckin,
   getBayCurrentCheckin,
   searchMasterlistByno,
+  findMasterlistByChassisFitment,
+  updateMasterlistAccessoryFields,
+  findTaskItemByMasterAccessory,
+  updateMasterlistRemark,
   findMasterByChassisSeq,
   findStaffNosByStaffIds,
   insertManualCheckIn,
+  upsertManualTaskCheckin,
   getTaskbyNoandType,
   getCheckinByNoandType,
   getCheckinByNo,
@@ -69,11 +80,13 @@ const {
 
 const {
   insertAccessory,
-  findAccessory
+  findAccessory,
+  getNewAccessoryByNo
 } = require('../models/accessoriesModel');
 const {
   selectBayStaff,
-  selectBayByName
+  selectBayByName,
+  getBayStaffDetailByBayId
 } = require('../models/bayModel');
 const {
   getStaffById
@@ -135,6 +148,111 @@ const insertMasterlistWithAccessories = async (req, res, next) => {
     });
   } catch (err) {
     console.error('[insertMasterlistWithAccessories] error', err);
+    next(err);
+  }
+};
+
+const repairMasterlistAccessoriesCtrl = async (req, res, next) => {
+  const masterlistArray = req.body;
+
+  if (!Array.isArray(masterlistArray)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Payload must be an array'
+    });
+  }
+
+  const hasEmptyValue = (value) => value === null || value === undefined || String(value).trim() === '';
+
+  try {
+    const summary = {
+      total: masterlistArray.length,
+      repaired_masterlists: [],
+      skipped_not_found: [],
+      skipped_no_accessories: [],
+      updated_masterlist_count: 0,
+      inserted_task_item_count: 0,
+      existing_task_item_count: 0
+    };
+
+    for (const item of masterlistArray) {
+      const master = await findMasterlistByChassisFitment(req, item.chassis, item.fitment_id);
+
+      if (!master?.no) {
+        summary.skipped_not_found.push({
+          chassis: item.chassis,
+          fitment_id: item.fitment_id
+        });
+        continue;
+      }
+
+      let wasUpdated = false;
+      const needsAccessoryFieldRepair =
+        hasEmptyValue(master.accessories_std) ||
+        hasEmptyValue(master.accessories_otp) ||
+        hasEmptyValue(master.accessories_full);
+
+      if (needsAccessoryFieldRepair) {
+        await updateMasterlistAccessoryFields(req, master.no, item);
+        wasUpdated = true;
+        summary.updated_masterlist_count += 1;
+      }
+
+      if (!Array.isArray(item.accessories) || item.accessories.length === 0) {
+        summary.skipped_no_accessories.push({
+          masterlist_id: master.no,
+          chassis: item.chassis,
+          fitment_id: item.fitment_id
+        });
+        if (wasUpdated) {
+          summary.repaired_masterlists.push(master.no);
+        }
+        continue;
+      }
+
+      for (const acc of item.accessories) {
+        let accessoryRow = await findAccessory(req, acc);
+
+        if (!accessoryRow) {
+          const accessoryId = await insertAccessory(req, acc);
+          accessoryRow = await getNewAccessoryByNo(req, accessoryId);
+        }
+
+        if (!accessoryRow?.no) {
+          continue;
+        }
+
+        const existingTaskItem = await findTaskItemByMasterAccessory(req, master.no, accessoryRow.no);
+        if (existingTaskItem) {
+          summary.existing_task_item_count += 1;
+          continue;
+        }
+
+        await insertTaskItem(req, {
+          masterlist_id: master.no,
+          accessories_id: accessoryRow.no,
+          price: accessoryRow.price || 0,
+          duration: accessoryRow.duration || null,
+          type: accessoryRow.type || null,
+          short_name: accessoryRow.short_name || null
+        });
+
+        wasUpdated = true;
+        summary.inserted_task_item_count += 1;
+      }
+
+      if (wasUpdated) {
+        summary.repaired_masterlists.push(master.no);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Masterlist accessories repair completed successfully',
+      data: summary
+    });
+  } catch (err) {
+    console.error('[repairMasterlistAccessoriesCtrl] error', err);
     next(err);
   }
 };
@@ -392,7 +510,7 @@ const getTasksListCtrl = async (req, res, next) => {
 
 const getTasksListCtrl2 = async (req, res, next) => {
 
-  const {  chassis , fitment_id , fitment_type, model , seq , date_from  ,date_to  , type, date_field, page, page_size } = req.body;
+  const {  chassis , fitment_id , fitment_type, model , seq , bay, backlog_only, date_from  ,date_to  , type, date_field, page, page_size } = req.body;
 
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -404,6 +522,8 @@ const getTasksListCtrl2 = async (req, res, next) => {
       fitment_id : fitment_id , 
       model : model , 
       seq : seq, 
+      bay,
+      backlog_only,
       fitment_type: fitment_type,
       date_from : date_from || today,
       date_to : date_to || date_from || today,
@@ -413,8 +533,11 @@ const getTasksListCtrl2 = async (req, res, next) => {
       offset
     }
 
-    const result = await getTasksList2(req , data);
-    const analysis = await getTasksAnalisys2(req , data)
+    const isCancelledTab = String(type || '').toUpperCase() === 'CANCELLED';
+    const result = isCancelledTab
+      ? await getCancelledCheckinList(req, data)
+      : await getTasksList2(req , data);
+    const analysis = isCancelledTab ? [] : await getTasksAnalisys2(req , data)
 
     res.status(200).json({
       success: true,
@@ -702,6 +825,24 @@ const getStandyListToday = async (req, res, next) => {
   }
 };
 
+const getStockCheckListToday = async (req, res, next) => {
+
+  const {  type  } = req.body;
+
+  try {
+
+    const result = await getStockCheckList(req , type);
+
+    res.status(200).json({
+      success: true,
+      message: "Get Stock Check List successfully",
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const pickStandby = async (req, res, next) => {
 
   const {  no  , type  } = req.body;
@@ -740,6 +881,40 @@ const pickStandby = async (req, res, next) => {
     next(error);
   }
   
+};
+
+const pickStockCheck = async (req, res, next) => {
+
+  const { no, type } = req.body;
+
+  try {
+    let result;
+
+    if (type == 'Ready') {
+      result = await updateCheckingTime(req, no);
+    }
+    else if (type == 'Pending') {
+      result = await updatePreparing(req, no);
+    }
+    else if (type == 'Preparing') {
+      result = await updateReady(req, no);
+    }
+    else {
+      result = await updatePickupTime(req, no);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Update Stock Check successfully",
+      data: result,
+    });
+    broadcastToTopics(
+      ['collectScreen', 'getCollectScreenCtrl', 'pickCheckin', 'getPickCheckinCtrl', 'currentCheckin', 'getCurrentCheckInCtrl'],
+      { type: 'refresh', source: 'pickStockCheck' }
+    );
+  } catch (error) {
+    next(error);
+  }
 };
 
 const getPickUpListNow = async (req, res, next) => {
@@ -927,6 +1102,282 @@ const getTaskDetail = async (req, res, next) => {
   
 };
 
+const getBayStaffByNameCtrl = async (req, res, next) => {
+  const { bay_name } = req.body;
+
+  if (!bay_name || !String(bay_name).trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'bay_name is required'
+    });
+  }
+
+  try {
+    const bay = await selectBayByName(req, String(bay_name).trim());
+
+    if (!bay?.no) {
+      return res.status(404).json({
+        success: false,
+        message: 'Bay not found'
+      });
+    }
+
+    const staff = await getBayStaffDetailByBayId(req, bay.no);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Bay staff loaded successfully',
+      data: {
+        bay_id: bay.no,
+        bay_name: bay.name,
+        bay_type: bay.type,
+        staff
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const createTaskDirectCheckinCtrl = async (req, res, next) => {
+  const { masterlist_id, type, date, bay_name, staff_ids, remark } = req.body;
+
+  if (!masterlist_id || !type || !date || !bay_name) {
+    return res.status(400).json({
+      success: false,
+      message: 'masterlist_id, type, date, and bay_name are required'
+    });
+  }
+  if (!remark || !String(remark).trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'remark is required'
+    });
+  }
+
+  try {
+    const master = await searchMasterlistByno(req, masterlist_id);
+    if (!master?.no) {
+      return res.status(404).json({
+        success: false,
+        message: 'Masterlist not found'
+      });
+    }
+
+    const existing = await searchCheckIN(req, master.no, type);
+    const isStandbyRecord = existing?.no && String(existing?.status || '').trim().toLowerCase() === 'standby';
+
+    if (existing?.no && !isStandbyRecord) {
+      return res.status(400).json({
+        success: false,
+        message: 'This task already has a check-in record'
+      });
+    }
+
+    const bay = await selectBayByName(req, String(bay_name).trim());
+    if (!bay?.no) {
+      return res.status(404).json({
+        success: false,
+        message: 'Bay not found'
+      });
+    }
+
+    const nextStaffIds = Array.isArray(staff_ids)
+      ? staff_ids
+      : (await getBayStaffDetailByBayId(req, bay.no)).map((staff) => staff.no);
+
+    const normalizedStaffIds = Array.from(
+      new Set((nextStaffIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))
+    );
+
+    if (normalizedStaffIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one staff must be selected'
+      });
+    }
+
+    const selectedDateTime = `${String(date).trim()} 00:00:00`;
+    const result = await upsertManualTaskCheckin(req, {
+      existing_checkin_id: isStandbyRecord ? existing.no : null,
+      masterlist_id: master.no,
+      action_by: req.user?.id || 4,
+      bay_id: bay.no,
+      type,
+      checkin_time: selectedDateTime,
+      checkout_time: selectedDateTime,
+      remark: String(remark).trim(),
+      staff_ids: normalizedStaffIds
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Task checked in and checked out successfully',
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const resetCheckinToStandbyCtrl = async (req, res, next) => {
+  const { masterlist_id, type } = req.body;
+
+  if (!masterlist_id || !type) {
+    return res.status(400).json({
+      success: false,
+      message: "masterlist_id and type are required"
+    });
+  }
+
+  try {
+    const checkinRows = await getCheckinByNoandType(req, masterlist_id, type);
+    const checkin = Array.isArray(checkinRows) ? checkinRows[0] : checkinRows;
+
+    if (!checkin || !checkin.checkin_id) {
+      return res.status(404).json({
+        success: false,
+        message: "Check-in record not found"
+      });
+    }
+
+    if (checkin.status !== 'Check-In') {
+      return res.status(400).json({
+        success: false,
+        message: "Only Check-In tasks can be reset to Standby"
+      });
+    }
+
+    const updated = await resetCheckinToStandby(req, checkin.checkin_id);
+
+    return res.status(200).json({
+      success: true,
+      message: "Reset to Standby successfully",
+      data: updated
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const changeTaskBayCtrl = async (req, res, next) => {
+  const { masterlist_id, type, bay_name, staff_ids } = req.body;
+
+  if (!masterlist_id || !type || !bay_name) {
+    return res.status(400).json({
+      success: false,
+      message: 'masterlist_id, type, and bay_name are required'
+    });
+  }
+
+  try {
+    const checkinRows = await getCheckinByNoandType(req, masterlist_id, type);
+    const checkin = Array.isArray(checkinRows) ? checkinRows[0] : checkinRows;
+
+    if (!checkin?.checkin_id) {
+      return res.status(404).json({
+        success: false,
+        message: 'Check-in record not found'
+      });
+    }
+
+    const bay = await selectBayByName(req, String(bay_name).trim());
+    if (!bay?.no) {
+      return res.status(404).json({
+        success: false,
+        message: 'Bay not found'
+      });
+    }
+
+    const nextStaffIds = Array.isArray(staff_ids)
+      ? staff_ids
+      : (await getBayStaffDetailByBayId(req, bay.no)).map((staff) => staff.no);
+
+    const updated = await changeCheckinBayAndStaff(req, {
+      checkin_id: checkin.checkin_id,
+      bay_id: bay.no,
+      staff_ids: nextStaffIds
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Task bay updated successfully',
+      data: updated
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const cancelTaskCheckinCtrl = async (req, res, next) => {
+  const { masterlist_id, type, remark } = req.body;
+
+  if (!masterlist_id || !type || !remark || !String(remark).trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'masterlist_id, type, and remark are required'
+    });
+  }
+
+  try {
+    const checkinRows = await getCheckinByNoandType(req, masterlist_id, type);
+    const checkin = Array.isArray(checkinRows) ? checkinRows[0] : checkinRows;
+
+    if (!checkin?.checkin_id) {
+      return res.status(404).json({
+        success: false,
+        message: 'Check-in record not found'
+      });
+    }
+
+    const result = await cancelCheckinWithArchive(req, {
+      checkin_id: checkin.checkin_id,
+      action_by: req.user?.id || 4,
+      remark: String(remark).trim()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Check-in cancelled successfully',
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const postwashTaskCtrl = async (req, res, next) => {
+  const { masterlist_id, remark } = req.body;
+
+  if (!masterlist_id || !remark || !String(remark).trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'masterlist_id and remark are required'
+    });
+  }
+
+  try {
+    const master = await searchMasterlistByno(req, masterlist_id);
+
+    if (!master?.no) {
+      return res.status(404).json({
+        success: false,
+        message: 'Masterlist not found'
+      });
+    }
+
+    const updated = await updateMasterlistRemark(req, master.no, String(remark).trim());
+
+    return res.status(200).json({
+      success: true,
+      message: 'Postwash remark updated successfully',
+      data: updated
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getmasterDetail2 = async (req, res, next) => {
 
   const {  masterlist_no  } = req.body;
@@ -1105,6 +1556,7 @@ const inactiveMasterCtrl = async (req, res, next) => {
 
 module.exports = {
   insertMasterlistWithAccessories,
+  repairMasterlistAccessoriesCtrl,
   checkInTask,
   checkOutTask,
   manualCheckin,
@@ -1123,7 +1575,9 @@ module.exports = {
   getHourlyCompletedStatsCtrl,
   deleteCheckinStaffCtrl,
   getStandyListToday,
+  getStockCheckListToday,
   pickStandby,
+  pickStockCheck,
   getPickUpListNow,
   getCheckInListCrtl2,
   checkRemark,
@@ -1133,6 +1587,12 @@ module.exports = {
   getCurrentCheckInCtrl,
   getBayCurrentCheckinCtrl,
   getTaskDetail,
+  getBayStaffByNameCtrl,
+  createTaskDirectCheckinCtrl,
+  changeTaskBayCtrl,
+  cancelTaskCheckinCtrl,
+  postwashTaskCtrl,
+  resetCheckinToStandbyCtrl,
   getmasterDetail2,
   getStaffDetail,
   standbytoCheckIn,

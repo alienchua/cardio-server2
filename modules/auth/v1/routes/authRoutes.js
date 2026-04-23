@@ -59,6 +59,7 @@ const {
 
 const { 
   insertMasterlistWithAccessories,
+  repairMasterlistAccessoriesCtrl,
   checkInTask,
   checkOutTask,
   getCheckInListCrtl,
@@ -78,7 +79,9 @@ const {
   getMasterListCtrl2,
   deleteCheckinStaffCtrl,
   getStandyListToday,
+  getStockCheckListToday,
   pickStandby,
+  pickStockCheck,
   getPickUpListNow,
   checkRemark,
   getStandbyListCtrl,
@@ -87,6 +90,12 @@ const {
   getCollectScreenCtrl,
   getBayCurrentCheckinCtrl,
   getTaskDetail,
+  getBayStaffByNameCtrl,
+  createTaskDirectCheckinCtrl,
+  changeTaskBayCtrl,
+  cancelTaskCheckinCtrl,
+  postwashTaskCtrl,
+  resetCheckinToStandbyCtrl,
   getmasterDetail2,
   getStaffDetail,
   standbytoCheckIn,
@@ -134,7 +143,7 @@ router.get('/dashboard', auth,  roleMiddleware('admin'),errorFormatter,responseF
 router.post('/getUser', getUser);
 router.post('/createAdmin', createAdmin);
 router.get('/getAdminWithId/:id', getAdminWithId);
-router.post('/updateAdmin', updateAdminById);
+router.post('/updateAdmin', auth, updateAdminById);
 router.get('/getAddAdmin', getAddAdmin);
 
 // staffs
@@ -165,6 +174,7 @@ router.post('/getAccessoriesByModel', getAccessoriesByModelCtrl);
 
 //MasterList
 router.post('/insertMasterlistWithAccessories', insertMasterlistWithAccessories);
+router.post('/repairMasterlistAccessories', repairMasterlistAccessoriesCtrl);
 
 // Task
 router.post('/checkInTask', checkInTask);
@@ -187,12 +197,19 @@ router.post('/getMasterListCtrl2', getMasterListCtrl2);
 router.post('/cancelMasterlistRange', cancelMasterlistRangeCtrl);
 router.post('/deleteCheckinStaffCtrl', deleteCheckinStaffCtrl);
 router.post('/pickStandby', pickStandby);
+router.post('/pickStockCheck', pickStockCheck);
 router.get('/getPickUpListNow', getPickUpListNow);
 router.post('/checkRemark', checkRemark);
 router.post('/getStandbyListCtrl', getStandbyListCtrl);
 router.get('/getCollectScreenCtrl', getCollectScreenCtrl);
 router.post('/getBayCurrentCheckinCtrl', getBayCurrentCheckinCtrl);
 router.post('/getTaskDetail', getTaskDetail);
+router.post('/getBayStaffByName', getBayStaffByNameCtrl);
+router.post('/createTaskDirectCheckin', createTaskDirectCheckinCtrl);
+router.post('/changeTaskBay', changeTaskBayCtrl);
+router.post('/cancelTaskCheckin', cancelTaskCheckinCtrl);
+router.post('/postwashTask', postwashTaskCtrl);
+router.post('/resetCheckinToStandby', resetCheckinToStandbyCtrl);
 router.post('/getmasterDetail2', getmasterDetail2);
 router.post('/getStaffDetail', getStaffDetail);
 router.post('/standbytoCheckIn', standbytoCheckIn);
@@ -216,6 +233,7 @@ router.post('/runBayReset', runBayResetCtrl);
 
 
 router.post('/getStandyListToday', getStandyListToday);
+router.post('/getStockCheckListToday', getStockCheckListToday);
 router.post('/updatecheckInTask', updatecheckInTask);
 router.get('/getCurrentCheckInCtrl', getCurrentCheckInCtrl);
 

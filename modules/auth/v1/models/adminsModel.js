@@ -51,17 +51,30 @@ const getAdmins = async (req) => {
   return result.rows;
 };
 
-const updateAdmin = async (req, { id, username, email, phone, role }) => {
-  const result = await req.app.get('pool').query(
-    `UPDATE admins
-     SET username = $1,
-         email = $2,
-         phone = $3,
-         role = $4
-     WHERE id = $5
-     RETURNING id, username, email, phone, role, created_at`,
-    [username, email || null, phone || null, role || 'admin', id]
-  );
+const updateAdmin = async (req, { id, username, email, phone, role, hashedPassword }) => {
+  const hasPasswordUpdate = Boolean(hashedPassword);
+  const query = hasPasswordUpdate
+    ? `UPDATE admins
+       SET username = $1,
+           email = $2,
+           phone = $3,
+           role = $4,
+           password = $5
+       WHERE id = $6
+       RETURNING id, username, email, phone, role, created_at`
+    : `UPDATE admins
+       SET username = $1,
+           email = $2,
+           phone = $3,
+           role = $4
+       WHERE id = $5
+       RETURNING id, username, email, phone, role, created_at`;
+
+  const values = hasPasswordUpdate
+    ? [username, email || null, phone || null, role || 'admin', hashedPassword, id]
+    : [username, email || null, phone || null, role || 'admin', id];
+
+  const result = await req.app.get('pool').query(query, values);
   return result.rows[0];
 };
 
