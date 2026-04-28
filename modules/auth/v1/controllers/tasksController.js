@@ -693,7 +693,7 @@ const getTasksStatusNullCountCtrl = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: "Get task count successfully",
-      data: { count }
+      data:  count 
     });
   } catch (error) {
     next(error);

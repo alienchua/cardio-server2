@@ -1365,8 +1365,9 @@ const getCancelledCheckinList = async (req, data) => {
 };
 
 const getTasksStatusNullCount = async (req) => {
+  console.log('run here')
   const query = `
-    SELECT COUNT(DISTINCT m.no)::int AS count
+    SELECT *
 FROM masterlist m 
 LEFT JOIN (
   SELECT 
@@ -1390,10 +1391,12 @@ WHERE c.checkin_time IS NULL
   AND m.cafi_date < CURRENT_DATE
   AND m.cancel_time IS NULL
   AND m.no not IN (1306193, 2594130) AND m2.type IS NOT NULL
+
   `;
 
   const result = await req.app.get('pool').query(query);
-  return result.rows[0]?.count || 0;
+  // console.log(result.rows)
+  return result.rows
 };
 
 const getAchievementList = async (req, data) => {
@@ -2781,6 +2784,7 @@ const getStaffTaskList = async (req , month , staff_id) => {
     m.model_description,
     c.type,
     b.name AS bay_name,
+    m.seq,
 
     t.total_duration,
     t.total_price,
