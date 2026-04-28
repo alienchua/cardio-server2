@@ -67,7 +67,16 @@ const updateStaffBy = async (req, res, next) => {
 
     const results = [];
     for (const item of updates) {
-      const updated = await updateStaffBystaff_id(req, item);
+      const normalized = {
+        ...item,
+        join_date: item.join_date ?? item.date_join ?? item.dateJoin,
+        resign_date: item.resign_date ?? item.date_resign ?? item.dateResign
+      };
+      delete normalized.date_join;
+      delete normalized.date_resign;
+      delete normalized.dateJoin;
+      delete normalized.dateResign;
+      const updated = await updateStaffBystaff_id(req, normalized);
       results.push(updated);
     }
 

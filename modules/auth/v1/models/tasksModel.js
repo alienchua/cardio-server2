@@ -2846,7 +2846,8 @@ GROUP BY
     b.name,
     t.total_duration,
     t.total_price,
-    t.task
+    t.task,
+    m.seq
 
 ORDER BY c.checkin_time;
 `;

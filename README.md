@@ -237,6 +237,8 @@ CREATE TABLE staff
     gender character varying(20) COLLATE pg_catalog."default",
     kwsp_id text COLLATE pg_catalog."default",
     contact character varying(20) COLLATE pg_catalog."default",
+    join_date date,
+    resign_date date,
     CONSTRAINT "PK_fcc33f76dabf4b8575315c65105" PRIMARY KEY (no)
 )
 

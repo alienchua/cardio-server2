@@ -132,7 +132,7 @@ WHERE no = $6 RETURNING *`, [ price, duration, type, full_name , short_name , no
 const getNewAccessory = async (req,  data) => {
   console.log(data)
   const result = await req.app.get('pool').query(`
-    SELECT *
+    SELECT *, price / 100.0 AS price
     FROM accessories
     WHERE type = 'New'
        OR price IS NULL
@@ -198,7 +198,9 @@ const updateAccessories2Model = async (req, updates) => {
     const results = [];
 
     for (const u of updates) {
-      const { price, duration, type, full_name, short_name, no } = u;
+      let { price, duration, type, full_name, short_name, no } = u;
+
+      price = price * 100; // convert to cents  
 
       const accessoryQuery = `
         UPDATE accessories 

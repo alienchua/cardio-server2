@@ -6,7 +6,7 @@ const insertStaffsModel = async (req, staffs) => {
   const columns = [
     "staff_id", "name", "ic", "bank_name", "acc_number",
     "nick_name", "type", "photo", "email", "gender",
-    "kwsp_id", "contact"
+    "kwsp_id", "contact", "join_date", "resign_date"
   ];
 
   // Generate placeholders like ($1,$2,...), ($13,$14,...) for each row
@@ -25,7 +25,9 @@ const insertStaffsModel = async (req, staffs) => {
       staff.email,
       staff.gender,
       staff.kwsp_id,
-      staff.contact
+      staff.contact,
+      staff.join_date || null,
+      staff.resign_date || null
     );
     return `(${columns.map((_, j) => `$${baseIndex + j + 1}`).join(",")})`;
   }).join(",");
@@ -80,6 +82,8 @@ const updateStaffBystaff_id = async (req, payload = {}) => {
     contact: payload.contact,
     email: payload.email,
     kwsp_id: payload.kwsp_id,
+    join_date: payload.join_date ,
+    resign_date: payload.resign_date ,
     photo: payload.photo,
     gender: payload.gender
   };
@@ -129,7 +133,7 @@ const insertStaff = async (req, staff) => {
   const columns = [
     "staff_id", "name", "ic", "bank_name", "acc_number",
     "nick_name", "type", "photo", "email", "gender",
-    "kwsp_id", "contact"
+    "kwsp_id", "contact", "join_date", "resign_date"
   ];
   
 
@@ -151,7 +155,9 @@ const insertStaff = async (req, staff) => {
     staff.email || null,
     staff.gender || null,
     staff.kwsp_id || null,
-    staff.contact || null
+    staff.contact || null,
+    staff.join_date || null,
+    staff.resign_date || null
   ];
 
   const result = await req.app.get('pool').query(query, values);
