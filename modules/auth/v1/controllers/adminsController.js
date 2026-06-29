@@ -174,7 +174,7 @@ const adminLogin = async (req, res, next) => {
     }
 
     const payload = { id: admin.id, role: admin.role || 'admin', type: 'admin' };
-    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '15m' });
+    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
     const refreshToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.status(200).json({

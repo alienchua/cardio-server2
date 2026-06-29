@@ -90,15 +90,27 @@ const insertAccessories = async (req, res, next) => {
 
 const updateAccessory = async (req, res, next) => {
 
-  const {   price, duration, type, full_name , short_name , no  } = req.body;
+  const {
+    price,
+    duration,
+    type,
+    full_name,
+    short_name,
+    no,
+    update_task_items = false,
+    task_item_from_date = null
+  } = req.body;
 
   try {
 
-    const result = await updateAccessoryByNO(req,  price, duration, type, full_name , short_name , no );
+    const result = await updateAccessoryByNO(req, price, duration, type, full_name, short_name, no, {
+      updateTaskItems: update_task_items === true,
+      taskItemFromDate: task_item_from_date
+    });
 
     res.status(200).json({
       success: true,
-      message: "Check Out successfully",
+      message: "Accessory updated successfully",
       data: result
     });
   } catch (error) {

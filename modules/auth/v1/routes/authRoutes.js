@@ -46,7 +46,8 @@ const {
   insertStafftoBay,
   runBayResetCtrl,
   getBayCheckinListCtrl,
-  getBayHistoryCtrl } = require('../controllers/bayController');
+  getBayHistoryCtrl,
+  getBayPerformanceCtrl } = require('../controllers/bayController');
 const { 
   createInstallment,
   getInstallmentCtrl ,
@@ -105,6 +106,10 @@ const {
   cancelMasterlistRangeCtrl,
   manualCheckin,
   addCheckinStaffCtrl} = require('../controllers/tasksController');
+const {
+  getSpecialCarSettingsCtrl,
+  updateSpecialCarSettingsCtrl
+} = require('../controllers/settingsController');
   
 const auth = require('../../../../middlewares/auth');
 const errorFormatter = require('../../../../middlewares/errorFormatter');
@@ -196,8 +201,8 @@ router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);
 router.post('/getMasterListCtrl2', getMasterListCtrl2);
 router.post('/cancelMasterlistRange', cancelMasterlistRangeCtrl);
 router.post('/deleteCheckinStaffCtrl', deleteCheckinStaffCtrl);
-router.post('/pickStandby', pickStandby);
-router.post('/pickStockCheck', pickStockCheck);
+router.post('/pickStandby', auth, pickStandby);
+router.post('/pickStockCheck', auth, pickStockCheck);
 router.get('/getPickUpListNow', getPickUpListNow);
 router.post('/checkRemark', checkRemark);
 router.post('/getStandbyListCtrl', getStandbyListCtrl);
@@ -214,10 +219,11 @@ router.post('/getmasterDetail2', getmasterDetail2);
 router.post('/getStaffDetail', getStaffDetail);
 router.post('/standbytoCheckIn', standbytoCheckIn);
 router.get('/getPickCheckinCtrl', getPickCheckinCtrl);
-router.get('/getstandbyHistory', getstandbyHistory);
+router.get('/getstandbyHistory', auth, getstandbyHistory);
 router.post('/inactiveMasterCtrl', inactiveMasterCtrl);
 router.get('/getBayCheckinListCtrl', getBayCheckinListCtrl);
 router.post('/getBayHistoryCtrl', getBayHistoryCtrl);
+router.post('/getBayPerformanceCtrl', getBayPerformanceCtrl);
 router.post('/manualCheckin', manualCheckin);
 router.post('/addCheckinStaffCtrl', addCheckinStaffCtrl);
 
@@ -232,10 +238,12 @@ router.post('/runBayReset', runBayResetCtrl);
 
 
 
-router.post('/getStandyListToday', getStandyListToday);
-router.post('/getStockCheckListToday', getStockCheckListToday);
+router.post('/getStandyListToday', auth, getStandyListToday);
+router.post('/getStockCheckListToday', auth, getStockCheckListToday);
 router.post('/updatecheckInTask', updatecheckInTask);
 router.get('/getCurrentCheckInCtrl', getCurrentCheckInCtrl);
+router.get('/settings/special-car', getSpecialCarSettingsCtrl);
+router.post('/settings/special-car', updateSpecialCarSettingsCtrl);
 
 // installment
 router.post('/createInstallment', createInstallment);

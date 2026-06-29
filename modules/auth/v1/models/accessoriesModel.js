@@ -121,24 +121,64 @@ const findAccessory = async (req,  data) => {
 };
 
 
-const updateAccessoryByNO = async (req,  price, duration, type, full_name , short_name , no ) => {
+const updateAccessoryByNO = async (req, price, duration, type, full_name, short_name, no, options = {}) => {
+  const pool = req.app.get('pool');
+  const { updateTaskItems = false, taskItemFromDate = null } = options;
 
-  const result = await req.app.get('pool').query(`UPDATE accessories SET price = $1 , duration = $2 , 
-    type = $3 , full_name = $4 , short_name = $5
-WHERE no = $6 RETURNING *`, [ price, duration, type, full_name , short_name , no ]);
-  return result.rows[0];
+  if (updateTaskItems && !taskItemFromDate) {
+    throw new Error('task_item_from_date is required when updating task items');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const accessoryResult = await client.query(`UPDATE accessories SET price = $1 , duration = $2 , 
+      type = $3 , full_name = $4 , short_name = $5
+WHERE no = $6 RETURNING *`, [price, duration, type, full_name, short_name, no]);
+
+    let taskItemsUpdatedCount = 0;
+    if (updateTaskItems) {
+      const taskItemResult = await client.query(`
+        UPDATE task_item ti
+        SET price = $1, duration = $2, type = $3, short_name = $4
+        FROM masterlist m
+        WHERE ti.accessories_id = $5
+          AND ti.masterlist_id = m.no
+          AND m.cafi_date::date >= $6::date
+        RETURNING ti.*;
+      `, [price, duration, type, short_name, no, taskItemFromDate]);
+
+      taskItemsUpdatedCount = taskItemResult.rowCount;
+    }
+
+    await client.query('COMMIT');
+    return {
+      accessory: accessoryResult.rows[0],
+      taskItemsUpdatedCount
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 const getNewAccessory = async (req,  data) => {
   console.log(data)
   const result = await req.app.get('pool').query(`
-    SELECT *
+    SELECT 	model_code, model, model_description, accessory_type, accessory_code, 
+	    ROUND(price::DECIMAL / 100, 2) AS price
+		, duration, type, no, full_name, short_name, accy_type, status, canzero
     FROM accessories
-    WHERE type = 'New'
-       OR price IS NULL
+    WHERE type != 'EXCLUDED' AND (type = 'New'
+       OR (price IS NULL AND COALESCE(canzero, false) = false)
        OR duration IS NULL
        OR full_name IS NULL
        OR short_name IS NULL
+        OR (price = 0 AND COALESCE(canzero, false) = false)
+        OR duration = 0)
   `, []);
   return result.rows;
 };
@@ -198,15 +238,15 @@ const updateAccessories2Model = async (req, updates) => {
     const results = [];
 
     for (const u of updates) {
-      const { price, duration, type, full_name, short_name, no } = u;
+      const { price, duration, type, full_name, short_name, canzero = false, no } = u;
 
       const accessoryQuery = `
         UPDATE accessories 
-        SET price = $1, duration = $2, type = $3, full_name = $4, short_name = $5
-        WHERE no = $6 
+        SET price = $1, duration = $2, type = $3, full_name = $4, short_name = $5, canzero = $6
+        WHERE no = $7 
         RETURNING *;
       `;
-      const accessoryValues = [price, duration, type, full_name, short_name, no];
+      const accessoryValues = [price, duration, type, full_name, short_name, canzero, no];
       const accessoryResult = await client.query(accessoryQuery, accessoryValues);
 
       const taskItemQuery = `

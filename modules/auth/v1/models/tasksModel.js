@@ -145,6 +145,57 @@ const searchMasterlist = async (req,  chassis, seq  ) => {
   return result.rows[0];
 };
 
+const getSpecialCarModelCodes = async (req) => {
+  const query = `
+    SELECT special_car
+    FROM settings
+    ORDER BY 1
+    LIMIT 1
+  `;
+
+  const result = await req.app.get('pool').query(query);
+  const rawValue = result.rows?.[0]?.special_car;
+
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue;
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean)
+      : [];
+  } catch (error) {
+    console.error('[getSpecialCarModelCodes] Failed to parse settings.special_car', error);
+    return [];
+  }
+};
+
+const updateSpecialCarModelCodes = async (req, specialCars) => {
+  const serialized = JSON.stringify(specialCars || []);
+
+  const updateQuery = `
+    UPDATE settings
+    SET special_car = $1
+    RETURNING special_car
+  `;
+
+  const updateResult = await req.app.get('pool').query(updateQuery, [serialized]);
+
+  if (updateResult.rowCount > 0) {
+    return Array.isArray(specialCars) ? specialCars : [];
+  }
+
+  const insertQuery = `
+    INSERT INTO settings (special_car)
+    VALUES ($1)
+    RETURNING special_car
+  `;
+
+  await req.app.get('pool').query(insertQuery, [serialized]);
+  return Array.isArray(specialCars) ? specialCars : [];
+};
+
 const searchMasterlistByno = async (req,  no ) => {
 
   const query = `SELECT * FROM masterlist WHERE no = $1 LIMIT 1`;
@@ -1122,6 +1173,12 @@ const getTasksList2 = async (req, data) => {
 
   // Bay name (joined bay table)
   if (data.bay) addJoin((p) => `COALESCE(b.name, '') ILIKE ${p[0]}`, [`%${data.bay}%`]);
+  if (data.staff_id) {
+    addJoin(
+      (p) => `EXISTS (SELECT 1 FROM checkin_staff csf WHERE csf.checkin_id = c.no AND csf.staff_id = ${p[0]})`,
+      [Number(data.staff_id)]
+    );
+  }
 
   // Date range
   const today = new Date().toISOString().slice(0, 10);
@@ -1281,6 +1338,12 @@ const getCancelledCheckinList = async (req, data) => {
   if (data.model) addFilter((p) => `m.model_description ILIKE ${p[0]}`, [`%${data.model}%`]);
   if (data.seq) addFilter((p) => `m.seq = ${p[0]}`, [Number(data.seq)]);
   if (data.bay) addFilter((p) => `COALESCE(b.name, '') ILIKE ${p[0]}`, [`%${data.bay}%`]);
+  if (data.staff_id) {
+    addFilter(
+      (p) => `EXISTS (SELECT 1 FROM checkin_staff csf WHERE csf.checkin_id = cc.checkin_id AND csf.staff_id = ${p[0]})`,
+      [Number(data.staff_id)]
+    );
+  }
 
   if (Array.isArray(data.fitment_type) && data.fitment_type.length > 0) {
     addFilter(
@@ -1367,30 +1430,54 @@ const getCancelledCheckinList = async (req, data) => {
 const getTasksStatusNullCount = async (req) => {
   console.log('run here')
   const query = `
-    SELECT *
-FROM masterlist m 
-LEFT JOIN (
-  SELECT 
-    TRIM(type) AS type, 
-    masterlist_id 
-  FROM task_item 
-  WHERE TRIM(type) IN ('FITMENT', 'HOIST')
-  GROUP BY TRIM(type), masterlist_id 
-) m2 ON m2.masterlist_id = m.no
+    SELECT
+      m.*,
+      m2.type AS type,
+      m2.masterlist_id AS task_item_masterlist_id,
+      c.no AS checkin_id,
+      c.masterlist_id AS checkin_masterlist_id,
+      c.action_by,
+      c.bay_id,
+      c.status AS checkin_status,
+      c.created_at AS checkin_created_at,
+      c.checkout_time,
+      c.remark,
+      c.type AS checkin_type,
+      c.checkin_time,
+      c.accessories,
+      c.accessory_status,
+      c.accessory_pickup,
+      c.showaccessories,
+      c.preparing_time,
+      c.checking,
+      b.no AS bay_no,
+      b.name AS bay_name,
+      b.status AS bay_status,
+      b.type AS bay_type
+    FROM masterlist m 
+    LEFT JOIN (
+      SELECT 
+        TRIM(type) AS type, 
+        masterlist_id 
+      FROM task_item 
+      WHERE TRIM(type) IN ('FITMENT', 'HOIST')
+      GROUP BY TRIM(type), masterlist_id 
+    ) m2 ON m2.masterlist_id = m.no
 
-LEFT JOIN checkin c 
-  ON m.no = c.masterlist_id 
-  AND c.type = m2.type
+    LEFT JOIN checkin c 
+      ON m.no = c.masterlist_id 
+      AND c.type = m2.type
 
-LEFT JOIN bay b 
-  ON b.no = c.bay_id
+    LEFT JOIN bay b 
+      ON b.no = c.bay_id
 
-WHERE c.checkin_time IS NULL 
-  AND m.status = 'Active'
-  AND m.cafi_date > DATE '2026-02-01'
-  AND m.cafi_date < CURRENT_DATE
-  AND m.cancel_time IS NULL
-  AND m.no not IN (1306193, 2594130) AND m2.type IS NOT NULL
+    WHERE c.checkin_time IS NULL 
+      AND m.status = 'Active'
+      AND m.cafi_date > DATE '2026-02-01'
+      AND m.cafi_date < CURRENT_DATE
+      AND m.cancel_time IS NULL
+      AND m.no not IN (1306193, 2594130)
+      AND m2.type IS NOT NULL
 
   `;
 
@@ -1425,6 +1512,8 @@ const getAchievementList = async (req, data) => {
       ELSE NULL
     END
   `;
+
+  filters.push(`m.cancel_time IS NULL`);
 
   if (data.chassis) {
     filters.push(`m.chassis ILIKE $${i++}`);
@@ -2779,6 +2868,7 @@ const getStaffTaskList = async (req , month , staff_id) => {
   const query = `SELECT 
     c.no AS checkin_id,
     c.checkin_time,
+    m.cafi_date,
     m.fitment_id,
     m.chassis,
     m.model_description,
@@ -2839,6 +2929,7 @@ AND EXISTS (
 GROUP BY
     c.no,
     c.checkin_time,
+    m.cafi_date,
     m.fitment_id,
     m.chassis,
     m.model_description,
@@ -2846,7 +2937,8 @@ GROUP BY
     b.name,
     t.total_duration,
     t.total_price,
-    t.task
+    t.task,
+    m.seq
 
 ORDER BY c.checkin_time;
 `;
@@ -3001,6 +3093,8 @@ module.exports = {
   getCheckinByNo,
   getTaskbyNo,
   getStaffTaskList,
+  getSpecialCarModelCodes,
+  updateSpecialCarModelCodes,
   deleteCheckStaff,
   getPickCheckin,
   standbyHistory,
