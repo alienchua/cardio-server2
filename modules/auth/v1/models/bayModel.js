@@ -390,6 +390,137 @@ const insertBayLog = async (req, { remark, staff_id, bay_id, action_by = 4 }) =>
   return result.rows[0];
 };
 
+const getBayPerformanceAnalytics = async (req, date, model) => {
+  const query = `
+    SELECT
+      b.name AS bay_name,
+      c.no AS checkin_id,
+      c.type,
+      c.status,
+      c.checkin_time,
+      c.checkout_time,
+      m.no AS masterlist_id,
+      m.fitment_id,
+      m.seq,
+      m.chassis,
+      m.model_code,
+      m.model_description,
+      COALESCE(task_summary.estimated_cycle_time, 0) AS estimated_cycle_time,
+      CASE
+        WHEN c.checkin_time IS NOT NULL AND c.checkout_time IS NOT NULL
+        THEN ROUND(EXTRACT(EPOCH FROM (c.checkout_time - c.checkin_time)) / 60.0, 2)
+        ELSE NULL
+      END AS actual_cycle_time,
+      COALESCE(staff_summary.staff_names, '') AS staff_names
+    FROM checkin c
+    LEFT JOIN bay b ON b.no = c.bay_id
+    LEFT JOIN masterlist m ON m.no = c.masterlist_id
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(t.duration), 0) AS estimated_cycle_time
+      FROM task_item t
+      WHERE t.masterlist_id = c.masterlist_id
+        AND t.type = c.type
+    ) AS task_summary ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT STRING_AGG(DISTINCT COALESCE(s.nick_name, s.name), ', ' ORDER BY COALESCE(s.nick_name, s.name)) AS staff_names
+      FROM checkin_staff cs
+      LEFT JOIN staff s ON s.no = cs.staff_id
+      WHERE cs.checkin_id = c.no
+    ) AS staff_summary ON TRUE
+    WHERE c.checkin_time IS NOT NULL
+      AND ($1::date IS NULL OR c.checkin_time::date = $1::date)
+      AND (
+        $2::text IS NULL
+        OR m.model_description ILIKE $2
+        OR m.model_code ILIKE $2
+      )
+    ORDER BY b.name ASC, c.checkin_time ASC, c.no ASC
+  `;
+
+  const values = [
+    date || null,
+    model ? `%${model}%` : null
+  ];
+
+  const result = await req.app.get('pool').query(query, values);
+  const rows = Array.isArray(result.rows) ? result.rows : [];
+  const summaryMap = new Map();
+  const detailMap = new Map();
+  const modelSet = new Set();
+
+  rows.forEach((row) => {
+    const bayName = row?.bay_name || 'Unknown';
+    const estimatedCycleTime = Number(row?.estimated_cycle_time) || 0;
+    const actualCycleTime = row?.actual_cycle_time === null || row?.actual_cycle_time === undefined
+      ? null
+      : Number(row.actual_cycle_time);
+    const modelDescription = row?.model_description || '';
+    const staffNames = String(row?.staff_names || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (modelDescription) {
+      modelSet.add(modelDescription);
+    }
+
+    if (!summaryMap.has(bayName)) {
+      summaryMap.set(bayName, {
+        bay_name: bayName,
+        total_tasks: 0,
+        total_estimated_cycle_time: 0,
+        total_actual_cycle_time: 0,
+        staff_names: new Set(),
+        models: new Set()
+      });
+    }
+
+    const summary = summaryMap.get(bayName);
+    summary.total_tasks += 1;
+    summary.total_estimated_cycle_time += estimatedCycleTime;
+    summary.total_actual_cycle_time += actualCycleTime || 0;
+    staffNames.forEach((name) => summary.staff_names.add(name));
+    if (modelDescription) {
+      summary.models.add(modelDescription);
+    }
+
+    if (!detailMap.has(bayName)) {
+      detailMap.set(bayName, []);
+    }
+
+    detailMap.get(bayName).push({
+      bay_name: bayName,
+      checkin_id: row.checkin_id,
+      masterlist_id: row.masterlist_id,
+      fitment_id: row.fitment_id,
+      seq: row.seq,
+      chassis: row.chassis,
+      model_code: row.model_code,
+      model_description: modelDescription,
+      type: row.type,
+      status: row.status,
+      checkin_time: row.checkin_time,
+      checkout_time: row.checkout_time,
+      estimated_cycle_time: estimatedCycleTime,
+      actual_cycle_time: actualCycleTime,
+      staff_names: staffNames
+    });
+  });
+
+  return {
+    summary: Array.from(summaryMap.values()).map((item) => ({
+      bay_name: item.bay_name,
+      total_tasks: item.total_tasks,
+      total_estimated_cycle_time: Number(item.total_estimated_cycle_time.toFixed(2)),
+      total_actual_cycle_time: Number(item.total_actual_cycle_time.toFixed(2)),
+      staff_names: Array.from(item.staff_names),
+      models: Array.from(item.models)
+    })),
+    details: Object.fromEntries(detailMap.entries()),
+    available_models: Array.from(modelSet).sort((a, b) => a.localeCompare(b))
+  };
+};
+
 module.exports = {
   selectBayStaff,
   getBayCheckinListByStatus,
@@ -404,5 +535,6 @@ module.exports = {
   addStaff,
   getBayCheckinList,
   getBayHistoryByDate,
-  insertBayLog
+  insertBayLog,
+  getBayPerformanceAnalytics
 };

@@ -11,7 +11,8 @@ const {
   addStaff,
   getBayCheckinList,
   getBayHistoryByDate,
-  insertBayLog
+  insertBayLog,
+  getBayPerformanceAnalytics
 } = require('../models/bayModel');
 const { resetBayAssignments } = require('../../../../utils/bayReset');
 
@@ -58,6 +59,22 @@ const getBayHistoryCtrl = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: "Bay history fetched successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getBayPerformanceCtrl = async (req, res, next) => {
+  const { date, model } = req.body;
+
+  try {
+    const result = await getBayPerformanceAnalytics(req, date, model);
+
+    res.status(200).json({
+      success: true,
+      message: "Bay performance fetched successfully",
       data: result
     });
   } catch (error) {
@@ -247,5 +264,6 @@ module.exports = {
   insertStafftoBay,
   runBayResetCtrl,
   getBayCheckinListCtrl,
-  getBayHistoryCtrl
+  getBayHistoryCtrl,
+  getBayPerformanceCtrl
 };

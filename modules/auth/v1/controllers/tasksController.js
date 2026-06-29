@@ -66,6 +66,7 @@ const {
   getCheckinByNo,
   getTaskbyNo,
   getStaffTaskList,
+  getSpecialCarModelCodes,
   deleteCheckStaff,
   getPickCheckin,
   standbyHistory,
@@ -272,12 +273,8 @@ const checkInTask = async (req, res, next) => {
       });
     }
 
-    const fitmentModelCodes = new Set([
-      'GUN125R-DEFSXEQ2',
-      'GUN125R-DETSXEQ3',
-      'GUN125R-BEFLXEQ1',
-      'KDH201R-RBMDYEL3'
-    ]);
+    const fitmentModelCodes = new Set(await getSpecialCarModelCodes(req));
+
     const modelCodeKey = String(serachMaster.model_code || '').trim().toUpperCase();
     const effectiveType = fitmentModelCodes.has(modelCodeKey) ? 'FITMENT' : type;
 
@@ -510,7 +507,7 @@ const getTasksListCtrl = async (req, res, next) => {
 
 const getTasksListCtrl2 = async (req, res, next) => {
 
-  const {  chassis , fitment_id , fitment_type, model , seq , bay, backlog_only, date_from  ,date_to  , type, date_field, page, page_size } = req.body;
+  const {  chassis , fitment_id , fitment_type, model , seq , bay, staff_id, backlog_only, date_from  ,date_to  , type, date_field, page, page_size } = req.body;
 
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -523,6 +520,7 @@ const getTasksListCtrl2 = async (req, res, next) => {
       model : model , 
       seq : seq, 
       bay,
+      staff_id,
       backlog_only,
       fitment_type: fitment_type,
       date_from : date_from || today,
@@ -553,7 +551,8 @@ const getTasksListCtrl2 = async (req, res, next) => {
 
 const getAchievementListCtrl = async (req, res, next) => {
 
-  const { chassis, fitment_id, fitment_type, model, model_code, seq, date_from, date_to, date_field, bay, page, page_size } = req.body;
+  const { chassis, fitment_id, fitment_type, model, model_code, seq, 
+    date_from, date_to, date_field, bay, page, page_size } = req.body;
 
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -687,6 +686,7 @@ const getTasksBacklogCountCtrl = async (req, res, next) => {
 };
 
 const getTasksStatusNullCountCtrl = async (req, res, next) => {
+  console.log('Received request for getTasksStatusNullCountCtrl');
   try {
     const count = await getTasksStatusNullCount(req);
 
@@ -886,7 +886,6 @@ const pickStandby = async (req, res, next) => {
 const pickStockCheck = async (req, res, next) => {
 
   const { no, type } = req.body;
-
   try {
     let result;
 
@@ -1190,7 +1189,9 @@ const createTaskDirectCheckinCtrl = async (req, res, next) => {
       new Set((nextStaffIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))
     );
 
-    if (normalizedStaffIds.length === 0) {
+    const normalizedBayName = String(bay?.name || bay_name || '').trim().toUpperCase();
+
+    if (normalizedStaffIds.length === 0 && normalizedBayName !== 'E1') {
       return res.status(400).json({
         success: false,
         message: 'At least one staff must be selected'
