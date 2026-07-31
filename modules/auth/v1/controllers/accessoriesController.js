@@ -9,6 +9,7 @@ const {
   findAccessory,
   getNewAccessoryByNo,
   getAccessoryGroup,
+  getAccessoriesList,
   getAccessoriesByModel,
   updateAccessories2Model
 } = require('../models/accessoriesModel');
@@ -204,6 +205,25 @@ const getAccessoryGroupCtrl = async (req, res, next) => {
   }
 };
 
+const getAccessoriesListCtrl = async (req, res, next) => {
+  const { limit = 10, offset = 0, search = '' } = req.body || {};
+
+  try {
+    const result = await getAccessoriesList(req, { limit, offset, search });
+
+    res.status(200).json({
+      success: true,
+      message: "Accessories fetched successfully",
+      data: result.rows,
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getAccessoriesByModelCtrl = async (req, res, next) => {
   const { model_code, model_description } = req.body;
 
@@ -232,5 +252,6 @@ module.exports = {
   updateAccessories2,
   insertAccessories2,
   getAccessoryGroupCtrl,
+  getAccessoriesListCtrl,
   getAccessoriesByModelCtrl
 };

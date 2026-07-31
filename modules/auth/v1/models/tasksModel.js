@@ -1,6 +1,8 @@
 require('dotenv').config();
 
-const insertMasterlist = async (req, data) => {
+const getQueryRunner = (req, client) => client || req.app.get('pool');
+
+const insertMasterlist = async (req, data, client = null) => {
 
       const query = `
        INSERT INTO masterlist (
@@ -23,7 +25,7 @@ const insertMasterlist = async (req, data) => {
       data.caout_date , data.caout_time, data.cafi_date
     ];
 
-    const result = await req.app.get('pool').query(
+    const result = await getQueryRunner(req, client).query(
       query,
       values
     );
@@ -35,7 +37,7 @@ const insertMasterlist = async (req, data) => {
 
 }
 
-const insertTaskItem = async (req, data) => {
+const insertTaskItem = async (req, data, client = null) => {
 
   const query = `
     INSERT INTO task_item (masterlist_id, accessories_id, price, duration, type, short_name)
@@ -47,7 +49,7 @@ const insertTaskItem = async (req, data) => {
     data.masterlist_id, data.accessories_id, data.price, data.duration, data.type, data.short_name
   ];
 
-  const result = await req.app.get('pool').query(
+  const result = await getQueryRunner(req, client).query(
     query,
     values
   );
@@ -222,6 +224,169 @@ const findMasterlistByChassisFitment = async (req, chassis, fitment_id) => {
 
   const values = [chassis, fitment_id];
   const result = await req.app.get('pool').query(query, values);
+  return result.rows[0];
+};
+
+const findMasterlistsByFitmentIds = async (req, fitmentIds = []) => {
+  const normalizedFitmentIds = [...new Set((fitmentIds || [])
+    .map((id) => String(id || '').trim().toLowerCase())
+    .filter(Boolean))];
+
+  if (normalizedFitmentIds.length === 0) {
+    return [];
+  }
+
+  const query = `
+    SELECT
+      m.*,
+      COUNT(DISTINCT t.no)::int AS task_item_count,
+      COUNT(DISTINCT c.no)::int AS checkin_count,
+      COUNT(DISTINCT o.no)::int AS task_offset_count
+    FROM masterlist m
+    LEFT JOIN task_item t ON t.masterlist_id = m.no
+    LEFT JOIN checkin c ON c.masterlist_id = m.no
+    LEFT JOIN task_offset o ON o.masterlist_id = m.no
+    WHERE LOWER(TRIM(m.fitment_id)) = ANY($1::text[])
+      AND m.cancel_time IS NULL
+    GROUP BY m.no
+  `;
+
+  const result = await req.app.get('pool').query(query, [normalizedFitmentIds]);
+  return result.rows;
+};
+
+const deleteMasterlistWithTaskItems = async (req, masterlistId, client = null) => {
+  const db = getQueryRunner(req, client);
+
+  await db.query('DELETE FROM task_item WHERE masterlist_id = $1', [masterlistId]);
+  await db.query('DELETE FROM task_offset WHERE masterlist_id = $1', [masterlistId]);
+  const result = await db.query('DELETE FROM masterlist WHERE no = $1 RETURNING *', [masterlistId]);
+  return result.rows[0];
+};
+
+const updateMasterlistFromImport = async (req, masterlistId, data, client = null) => {
+  const db = getQueryRunner(req, client);
+  const query = `
+    UPDATE masterlist
+    SET chassis = $1,
+        seq = $2,
+        fitment_id = $3,
+        model_code = $4,
+        model_description = $5,
+        colour = $6,
+        accessories_std = $7,
+        accessories_otp = $8,
+        accessories_full = $9,
+        caout_date = $10,
+        caout_time = $11,
+        cafi_date = $12,
+        cancel_time = NULL,
+        cancel_remark = NULL,
+        status = 'Active'
+    WHERE no = $13
+    RETURNING *
+  `;
+
+  const values = [
+    data.chassis,
+    data.seq,
+    data.fitment_id,
+    data.model_code,
+    data.model_description,
+    data.colour,
+    data.accessories_std,
+    data.accessories_otp,
+    data.accessories_full,
+    data.caout_date,
+    data.caout_time,
+    data.cafi_date,
+    masterlistId
+  ];
+
+  const result = await db.query(query, values);
+  return result.rows[0];
+};
+
+const deleteTaskItemsByMasterlist = async (req, masterlistId, client = null) => {
+  const db = getQueryRunner(req, client);
+  const result = await db.query('DELETE FROM task_item WHERE masterlist_id = $1 RETURNING *', [masterlistId]);
+  return result.rows;
+};
+
+const deleteTaskOffsetsByMasterlist = async (req, masterlistId, client = null) => {
+  const db = getQueryRunner(req, client);
+  const result = await db.query('DELETE FROM task_offset WHERE masterlist_id = $1 RETURNING *', [masterlistId]);
+  return result.rows;
+};
+
+const cancelCheckinsByMasterlist = async (req, masterlistId, actionBy, remark, client = null) => {
+  const db = getQueryRunner(req, client);
+  const archiveQuery = `
+    INSERT INTO cencellcheckin (
+      masterlist_id,
+      action_by,
+      checkin_id,
+      bay_id,
+      status,
+      created_at,
+      checkout_time,
+      remark,
+      type,
+      checkin_time,
+      accessory_status,
+      accessory_pickup,
+      showaccessories,
+      preparing_time
+    )
+    SELECT
+      masterlist_id,
+      $2,
+      no,
+      bay_id,
+      status,
+      created_at,
+      checkout_time,
+      $3,
+      type,
+      checkin_time,
+      accessory_status,
+      accessory_pickup,
+      showaccessories,
+      preparing_time
+    FROM checkin
+    WHERE masterlist_id = $1
+    RETURNING *
+  `;
+
+  const archiveResult = await db.query(archiveQuery, [masterlistId, actionBy, remark]);
+  await db.query(`
+    DELETE FROM checkin_staff
+    WHERE checkin_id IN (
+      SELECT no
+      FROM checkin
+      WHERE masterlist_id = $1
+    )
+  `, [masterlistId]);
+  const deleteResult = await db.query('DELETE FROM checkin WHERE masterlist_id = $1 RETURNING *', [masterlistId]);
+
+  return {
+    archived: archiveResult.rows,
+    deleted: deleteResult.rows
+  };
+};
+
+const cancelMasterlistForReplacement = async (req, masterlistId, remark, client = null) => {
+  const db = getQueryRunner(req, client);
+  const query = `
+    UPDATE masterlist
+    SET cancel_time = $1,
+        cancel_remark = $2,
+        status = 'Inactive'
+    WHERE no = $3
+    RETURNING *
+  `;
+
+  const result = await db.query(query, [new Date(), remark, masterlistId]);
   return result.rows[0];
 };
 
@@ -2195,6 +2360,73 @@ WHERE  t.masterlist_id = $1
   return result.rows
 };
 
+const updateTaskItemPriceWithHistory = async (req, { task_item_id, price, remark, action_by = null }) => {
+  const client = await req.app.get('pool').connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const currentResult = await client.query(
+      'SELECT * FROM task_item WHERE no = $1 FOR UPDATE',
+      [task_item_id]
+    );
+    const current = currentResult.rows[0];
+    if (!current) {
+      const err = new Error('Task item not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const nextPrice = Number(price);
+    const updateResult = await client.query(
+      'UPDATE task_item SET price = $1 WHERE no = $2 RETURNING *',
+      [nextPrice, task_item_id]
+    );
+
+    const historyResult = await client.query(
+      `
+        INSERT INTO task_item_price_history (
+          task_item_id, masterlist_id, old_price, new_price, remark, action_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `,
+      [task_item_id, current.masterlist_id, current.price || 0, nextPrice, remark, action_by]
+    );
+
+    await client.query('COMMIT');
+
+    return {
+      task_item: updateResult.rows[0],
+      history: historyResult.rows[0]
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+const getTaskItemPriceHistory = async (req, taskItemIds = []) => {
+  const ids = [...new Set((taskItemIds || []).map((id) => Number(id)).filter(Number.isFinite))];
+  if (ids.length === 0) return [];
+
+  const result = await req.app.get('pool').query(
+    `
+      SELECT h.*, COALESCE(a.username, s.nick_name) AS action_by_name
+      FROM task_item_price_history h
+      LEFT JOIN admins a ON a.id = h.action_by
+      LEFT JOIN staff s ON s.no = h.action_by
+      WHERE h.task_item_id = ANY($1::bigint[])
+      ORDER BY h.created_at DESC, h.id DESC
+    `,
+    [ids]
+  );
+
+  return result.rows;
+};
+
 const checkCheckinStaff = async (req, staff_id  ) => {
 
   const query = `
@@ -2863,7 +3095,15 @@ GROUP BY
   return result.rows;
 };
 
-const getStaffTaskList = async (req , month , staff_id) => {
+const getStaffTaskList = async (req , month , staff_id, options = {}) => {
+  const dateFrom = options.dateFrom || null;
+  const dateTo = options.dateTo || null;
+  const hasDateRange = Boolean(dateFrom && dateTo);
+  const dateFilterSql = hasDateRange
+    ? `c.checkin_time >= $3::date
+  AND c.checkin_time < ($4::date + INTERVAL '1 day')`
+    : `c.checkin_time >= $1
+  AND c.checkin_time < ($1::date + INTERVAL '1 month')`;
 
   const query = `SELECT 
     c.no AS checkin_id,
@@ -2871,6 +3111,7 @@ const getStaffTaskList = async (req , month , staff_id) => {
     m.cafi_date,
     m.fitment_id,
     m.chassis,
+    m.colour,
     m.model_description,
     c.type,
     b.name AS bay_name,
@@ -2879,11 +3120,19 @@ const getStaffTaskList = async (req , month , staff_id) => {
     t.total_duration,
     t.total_price,
     t.task,
+    selected_staff.position AS staff_position,
+    COALESCE(staff_counts.non_trainee_staff_count, 0) AS non_trainee_staff_count,
+    CASE
+        WHEN UPPER(COALESCE(selected_staff.position, '')) = 'TRAINEE' THEN 0
+        WHEN COALESCE(staff_counts.non_trainee_staff_count, 0) = 0 THEN 0
+        ELSE COALESCE(t.total_price, 0) / staff_counts.non_trainee_staff_count
+    END AS staff_production_price,
 
     jsonb_agg(
         DISTINCT jsonb_build_object(
             'staff_id', s2.no,
-            'nick_name', s2.nick_name
+            'nick_name', s2.nick_name,
+            'position', s.position
         )
     ) FILTER (WHERE s2.no IS NOT NULL) AS staffList
 
@@ -2916,8 +3165,19 @@ LEFT JOIN checkin_staff s
 LEFT JOIN staff s2 
     ON s2.no = s.staff_id
 
-WHERE c.checkin_time >= $1
-  AND c.checkin_time < ($1::date + INTERVAL '1 month')
+LEFT JOIN checkin_staff selected_staff
+    ON selected_staff.checkin_id = c.no
+   AND selected_staff.staff_id = $2
+
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS non_trainee_staff_count
+    FROM checkin_staff cs_count
+    WHERE cs_count.checkin_id = c.no
+      AND UPPER(COALESCE(cs_count.position, '')) != 'TRAINEE'
+) staff_counts ON TRUE
+
+WHERE ${dateFilterSql}
+  AND m.cancel_time IS NULL
 
 AND EXISTS (
     SELECT 1
@@ -2932,12 +3192,15 @@ GROUP BY
     m.cafi_date,
     m.fitment_id,
     m.chassis,
+    m.colour,
     m.model_description,
     c.type,
     b.name,
     t.total_duration,
     t.total_price,
     t.task,
+    selected_staff.position,
+    staff_counts.non_trainee_staff_count,
     m.seq
 
 ORDER BY c.checkin_time;
@@ -2946,6 +3209,9 @@ ORDER BY c.checkin_time;
   const values = [
     month , staff_id
   ];
+  if (hasDateRange) {
+    values.push(dateFrom, dateTo);
+  }
 
   const result = await req.app.get('pool').query(
     query,
@@ -3080,8 +3346,15 @@ module.exports = {
   getBayCurrentCheckin,
   searchMasterlistByno,
   findMasterlistByChassisFitment,
+  findMasterlistsByFitmentIds,
+  updateMasterlistFromImport,
+  deleteTaskItemsByMasterlist,
+  deleteTaskOffsetsByMasterlist,
+  cancelCheckinsByMasterlist,
+  cancelMasterlistForReplacement,
   updateMasterlistAccessoryFields,
   findTaskItemByMasterAccessory,
+  deleteMasterlistWithTaskItems,
   updateMasterlistRemark,
   findMasterByChassisSeq,
   findStaffNosByStaffIds,
@@ -3089,6 +3362,8 @@ module.exports = {
   createManualTaskCheckin,
   upsertManualTaskCheckin,
   getTaskbyNoandType,
+  updateTaskItemPriceWithHistory,
+  getTaskItemPriceHistory,
   getCheckinByNoandType,
   getCheckinByNo,
   getTaskbyNo,

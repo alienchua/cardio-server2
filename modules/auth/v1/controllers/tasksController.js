@@ -54,14 +54,23 @@ const {
   getBayCurrentCheckin,
   searchMasterlistByno,
   findMasterlistByChassisFitment,
+  findMasterlistsByFitmentIds,
+  updateMasterlistFromImport,
+  deleteTaskItemsByMasterlist,
+  deleteTaskOffsetsByMasterlist,
+  cancelCheckinsByMasterlist,
+  cancelMasterlistForReplacement,
   updateMasterlistAccessoryFields,
   findTaskItemByMasterAccessory,
+  deleteMasterlistWithTaskItems,
   updateMasterlistRemark,
   findMasterByChassisSeq,
   findStaffNosByStaffIds,
   insertManualCheckIn,
   upsertManualTaskCheckin,
   getTaskbyNoandType,
+  updateTaskItemPriceWithHistory,
+  getTaskItemPriceHistory,
   getCheckinByNoandType,
   getCheckinByNo,
   getTaskbyNo,
@@ -96,9 +105,198 @@ const { broadcastToTopic, broadcastToTopics } = require('../../../realtime/v1/co
 
 require('dotenv').config();
 
+const normalizeImportKey = (value) => String(value || '').trim().toLowerCase();
+const normalizeDisplayValue = (value) => String(value || '').trim();
+
+const summarizeMasterlistRow = (row) => ({
+  no: row.no,
+  row_number: row.row_number || null,
+  chassis: row.chassis || '',
+  seq: row.seq || '',
+  fitment_id: row.fitment_id || '',
+  model_code: row.model_code || '',
+  model_description: row.model_description || '',
+  accessories_full: row.accessories_full || '',
+  task_item_count: Number(row.task_item_count || 0),
+  checkin_count: Number(row.checkin_count || 0),
+  task_offset_count: Number(row.task_offset_count || 0),
+  accessories_count: Array.isArray(row.accessories) ? row.accessories.length : undefined
+});
+
+const linkMasterlistAccessories = async (req, masterlistId, accessories = [], client = null) => {
+  for (const acc of accessories || []) {
+    let accessoryRow = await findAccessory(req, acc, client);
+
+    if (!accessoryRow) {
+      const accessoryId = await insertAccessory(req, acc, client);
+      accessoryRow = {
+        no: accessoryId,
+        price: 0,
+        duration: null,
+        type: null,
+        short_name: null
+      };
+    }
+
+    await insertTaskItem(req, {
+      masterlist_id: masterlistId,
+      accessories_id: accessoryRow.no,
+      price: accessoryRow?.price || 0,
+      duration: accessoryRow?.duration || null,
+      type: accessoryRow?.type || null,
+      short_name: accessoryRow?.short_name || null,
+    }, client);
+  }
+};
+
+const insertMasterlistItemWithAccessories = async (req, item, options = {}) => {
+  const { client = null, replaceExistingFitment = false } = options;
+
+  if (replaceExistingFitment) {
+    const existingRows = await findMasterlistsByFitmentIds(req, [item.fitment_id]);
+    const incomingChassis = normalizeImportKey(item.chassis);
+    const matchingRows = existingRows.filter((row) => (
+      normalizeImportKey(row.fitment_id) === normalizeImportKey(item.fitment_id) &&
+      normalizeImportKey(row.chassis) !== incomingChassis
+    ));
+
+    if (matchingRows.length > 0) {
+      const historyAction = item?.fitment_history_action === 'cancel' ? 'cancel' : 'keep';
+      const primaryRow = matchingRows[0];
+      const hasHistory = Number(primaryRow.checkin_count || 0) > 0 || Number(primaryRow.task_offset_count || 0) > 0;
+
+      if (hasHistory && historyAction === 'cancel') {
+        const remark = item?.fitment_history_remark || `Replaced by import for Fitment ID ${item.fitment_id}`;
+        await cancelCheckinsByMasterlist(req, primaryRow.no, req.user?.id || 4, remark, client);
+        await deleteTaskOffsetsByMasterlist(req, primaryRow.no, client);
+        await deleteTaskItemsByMasterlist(req, primaryRow.no, client);
+        await cancelMasterlistForReplacement(req, primaryRow.no, remark, client);
+      } else {
+        await updateMasterlistFromImport(req, primaryRow.no, item, client);
+        await deleteTaskItemsByMasterlist(req, primaryRow.no, client);
+        await linkMasterlistAccessories(req, primaryRow.no, item.accessories || [], client);
+        return {
+          id: primaryRow.no,
+          operation: 'replaced'
+        };
+      }
+
+      for (const existingRow of matchingRows.slice(1)) {
+        await deleteMasterlistWithTaskItems(req, existingRow.no, client);
+      }
+    }
+  }
+
+  const masterlistResult = await insertMasterlist(req, item, client);
+  const { id, operation } = masterlistResult;
+
+  if (operation === 'inserted') {
+    await linkMasterlistAccessories(req, id, item.accessories || [], client);
+  }
+
+  return masterlistResult;
+};
+
+const checkMasterlistFitmentConflicts = async (req, res, next) => {
+  const masterlistArray = Array.isArray(req.body) ? req.body : req.body?.rows;
+
+  if (!Array.isArray(masterlistArray)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Payload must be an array'
+    });
+  }
+
+  try {
+    const incomingByFitment = new Map();
+    for (const item of masterlistArray) {
+      const fitmentKey = normalizeImportKey(item.fitment_id);
+      if (!fitmentKey) continue;
+
+      const list = incomingByFitment.get(fitmentKey) || [];
+      list.push(item);
+      incomingByFitment.set(fitmentKey, list);
+    }
+
+    const existingRows = await findMasterlistsByFitmentIds(req, [...incomingByFitment.keys()]);
+    const existingByFitment = new Map();
+    for (const row of existingRows) {
+      const fitmentKey = normalizeImportKey(row.fitment_id);
+      const list = existingByFitment.get(fitmentKey) || [];
+      list.push(row);
+      existingByFitment.set(fitmentKey, list);
+    }
+
+    const conflicts = [];
+
+    for (const [fitmentKey, incomingRows] of incomingByFitment.entries()) {
+      const distinctIncomingChassis = [...new Set(incomingRows.map((row) => normalizeImportKey(row.chassis)).filter(Boolean))];
+      const existingMatches = existingByFitment.get(fitmentKey) || [];
+      const dbConflicts = existingMatches.filter((existing) => (
+        incomingRows.some((incoming) => (
+          normalizeImportKey(existing.chassis) !== normalizeImportKey(incoming.chassis)
+        ))
+      ));
+
+      if (distinctIncomingChassis.length <= 1 && dbConflicts.length === 0) {
+        continue;
+      }
+
+      const optionMap = new Map();
+      dbConflicts.forEach((row) => {
+        optionMap.set(`existing:${row.no}`, {
+          choice_key: `existing:${row.no}`,
+          source: 'existing',
+          label: 'Keep existing database row',
+          row: summarizeMasterlistRow(row)
+        });
+      });
+
+      incomingRows.forEach((row) => {
+        optionMap.set(`incoming:${row.row_number}`, {
+          choice_key: `incoming:${row.row_number}`,
+          source: 'incoming',
+          label: 'Keep incoming Excel row',
+          row: summarizeMasterlistRow(row)
+        });
+      });
+
+      conflicts.push({
+        fitment_id: normalizeDisplayValue(incomingRows[0]?.fitment_id || existingMatches[0]?.fitment_id),
+        fitment_key: fitmentKey,
+        reason: dbConflicts.length > 0
+          ? 'Same Fitment ID already exists with a different chassis'
+          : 'Same Fitment ID appears more than once in the import file with different chassis',
+        options: [...optionMap.values()]
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        total_conflicts: conflicts.length,
+        conflicts
+      }
+    });
+  } catch (err) {
+    console.error('[checkMasterlistFitmentConflicts] error', err);
+    next(err);
+  }
+};
+
 
 const insertMasterlistWithAccessories = async (req, res, next) => {
   const masterlistArray = req.body;
+
+  if (!Array.isArray(masterlistArray)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Payload must be an array'
+    });
+  }
+
+  const pool = req.app.get('pool');
+  const client = await pool.connect();
 
   try {
     // console.log('[insertMasterlistWithAccessories] received', {
@@ -106,50 +304,67 @@ const insertMasterlistWithAccessories = async (req, res, next) => {
     //   sample: Array.isArray(masterlistArray) ? masterlistArray[0] : masterlistArray
     // });
     const limitedData = masterlistArray; // you can slice if testing only a few items
+    await client.query('BEGIN');
 
     for (const item of limitedData) {
-      // console.log('[insertMasterlistWithAccessories] processing item', item);
-      // 1. insert or update masterlist
-      const masterlistResult = await insertMasterlist(req, item);
-      const { id, operation } = masterlistResult;
-      // console.log('[insertMasterlistWithAccessories] masterlist result', masterlistResult);
-      if (operation === 'inserted') {
-        // 2. process accessories only for new records
-        for (const acc of item.accessories || []) {
-          // console.log('[insertMasterlistWithAccessories] accessory', acc);
-          // Check if accessory exists
-          let accessoryRow = await findAccessory(req, acc);
-
-          let accessoryId;
-          if (!accessoryRow) {
-            // not exist → insert new accessory
-            accessoryId = await insertAccessory(req, acc);
-          } else {
-            accessoryId = accessoryRow.no;
-          }
-          // console.log('[insertMasterlistWithAccessories] linking accessory', { accessoryId, masterlistId: id });
-
-          // 3. link accessory to masterlist
-          await insertTaskItem(req, {
-            masterlist_id: id, // ✅ use the id from masterlistResult
-            accessories_id: accessoryId,
-            price: accessoryRow?.price || 0,
-            duration: accessoryRow?.duration || null,
-            type: accessoryRow?.type || null,
-            short_name: accessoryRow?.short_name || null,
-          });
-        }
-      }
-
+      await insertMasterlistItemWithAccessories(req, item, {
+        client,
+        replaceExistingFitment: item?.fitment_conflict_action === 'replace'
+      });
     }
+
+    await client.query('COMMIT');
 
     res.status(200).json({
       success: true,
       message: "Inserted/updated masterlist with accessories ✅"
     });
+
+    
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('[insertMasterlistWithAccessories] error', err);
     next(err);
+  } finally {
+    client.release();
+  }
+};
+
+const insertMasterlistWithAccessoriesResolved = async (req, res, next) => {
+  const masterlistArray = req.body;
+
+  if (!Array.isArray(masterlistArray)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Payload must be an array'
+    });
+  }
+
+  const pool = req.app.get('pool');
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    for (const item of masterlistArray) {
+      await insertMasterlistItemWithAccessories(req, item, {
+        client,
+        replaceExistingFitment: item?.fitment_conflict_action === 'replace'
+      });
+    }
+
+    await client.query('COMMIT');
+
+    res.status(200).json({
+      success: true,
+      message: 'Inserted/updated masterlist with resolved fitment conflicts'
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[insertMasterlistWithAccessoriesResolved] error', err);
+    next(err);
+  } finally {
+    client.release();
   }
 };
 
@@ -262,7 +477,7 @@ const checkInTask = async (req, res, next) => {
 
   const {  chassis, fitment , bay_id , type , status} = req.body;
 
-  console.log(chassis, fitment , bay_id , type , status)
+  // console.log(chassis, fitment , bay_id , type , status)
   try {
 
     const serachMaster = await searchMasterlist(req, chassis, fitment);
@@ -377,7 +592,7 @@ const manualCheckin = async (req, res, next) => {
   const defaultDate = new Date('2025-12-24T00:00:00Z');
   const actionBy = req.user?.id || 4; // fallback to admin id 4
 
-  console.log('[manualCheckin] received payload count:', payload.length);
+  // console.log('[manualCheckin] received payload count:', payload.length);
 
   for (const entry of payload) {
     try {
@@ -445,7 +660,7 @@ const manualCheckin = async (req, res, next) => {
     errors
   };
 
-  console.log('[manualCheckin] summary:', responseBody);
+  // console.log('[manualCheckin] summary:', responseBody);
 
   res.status(errors.length ? 400 : 200).json(responseBody);
 };
@@ -454,7 +669,7 @@ const checkRemark = async (req, res, next) => {
 
   const { masterlist_id , type , remark } = req.body;
 
-  console.log(masterlist_id , type , remark)
+  // console.log(masterlist_id , type , remark)
 
   try {
 
@@ -686,7 +901,7 @@ const getTasksBacklogCountCtrl = async (req, res, next) => {
 };
 
 const getTasksStatusNullCountCtrl = async (req, res, next) => {
-  console.log('Received request for getTasksStatusNullCountCtrl');
+  // console.log('Received request for getTasksStatusNullCountCtrl');
   try {
     const count = await getTasksStatusNullCount(req);
 
@@ -846,8 +1061,23 @@ const getStockCheckListToday = async (req, res, next) => {
 const pickStandby = async (req, res, next) => {
 
   const {  no  , type  } = req.body;
+  const role = String(req.user?.role || '').toLowerCase();
 
-  console.log(no , type)
+  // console.log(no , type)
+
+  if (role === 'installer' && type !== 'Ready') {
+    return res.status(403).json({
+      success: false,
+      message: 'Installer can only mark ready parts as collected'
+    });
+  }
+
+  if (role === 'warehouse' && !['Pending', 'Preparing'].includes(type)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Warehouse can only mark vehicle in or ready to collect'
+    });
+  }
 
   try {
 
@@ -1061,7 +1291,7 @@ const getBayCurrentCheckinCtrl = async (req, res, next) => {
 
   const {  bayname } = req.body;
 
-  console.log(bayname)
+  // console.log(bayname)
   try {
   
     const result = await getBayCurrentCheckin(req , bayname);
@@ -1132,6 +1362,50 @@ const getBayStaffByNameCtrl = async (req, res, next) => {
         bay_type: bay.type,
         staff
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateTaskItemPriceCtrl = async (req, res, next) => {
+  const { task_item_id, price, remark, action_by } = req.body;
+
+  try {
+    const nextPrice = Number(price);
+    if (!task_item_id || !Number.isFinite(nextPrice) || nextPrice < 0 || !remark || !String(remark).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'task_item_id, valid price, and remark are required'
+      });
+    }
+
+    const result = await updateTaskItemPriceWithHistory(req, {
+      task_item_id,
+      price: Math.round(nextPrice),
+      remark: String(remark).trim(),
+      action_by: action_by || req.user?.id || null
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Task item price updated successfully',
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getTaskItemPriceHistoryCtrl = async (req, res, next) => {
+  const { task_item_ids } = req.body;
+
+  try {
+    const result = await getTaskItemPriceHistory(req, Array.isArray(task_item_ids) ? task_item_ids : []);
+    res.status(200).json({
+      success: true,
+      message: 'Get task item price history successfully',
+      data: result
     });
   } catch (error) {
     next(error);
@@ -1404,7 +1678,7 @@ const getmasterDetail2 = async (req, res, next) => {
 };
 
 const getStaffDetail = async (req, res, next) => {
-  console.log(req.body)
+  // console.log(req.body)
   try {
     const { month , staff_id} = req.body;   // "2025-11"
 
@@ -1557,6 +1831,8 @@ const inactiveMasterCtrl = async (req, res, next) => {
 
 module.exports = {
   insertMasterlistWithAccessories,
+  insertMasterlistWithAccessoriesResolved,
+  checkMasterlistFitmentConflicts,
   repairMasterlistAccessoriesCtrl,
   checkInTask,
   checkOutTask,
@@ -1588,6 +1864,8 @@ module.exports = {
   getCurrentCheckInCtrl,
   getBayCurrentCheckinCtrl,
   getTaskDetail,
+  updateTaskItemPriceCtrl,
+  getTaskItemPriceHistoryCtrl,
   getBayStaffByNameCtrl,
   createTaskDirectCheckinCtrl,
   changeTaskBayCtrl,

@@ -86,14 +86,14 @@ const insertAccessoriesModel = async (req, accessories) => {
 
 //   const result = await req.app.get('pool').query(`INSERT INTO accessories (
 //         accessory_code, accessory_type, model_code, model_description, model_group, price, duration, short_name
-//       ) VALUES ($1,$2,$3,$4,$5,NULL,NULL,NULL)
+//       ) VALUES ($1,$2,$3,$4,$5,NULL,NULL,NULL)c
 //       RETURNING *`, [code, type, modal_code, description, group]);
 //   return result.rows[0];
 
 // };
 
-const insertAccessory = async (req, acc) => {
-  const pool = req.app.get('pool');
+const insertAccessory = async (req, acc, client = null) => {
+  const db = client || req.app.get('pool');
   const query = `
     INSERT INTO accessories (accessory_code, accessory_type, model_code, model_description, model , price , duration , type)
     VALUES ($1,$2,$3,$4,$5 , $6 , $7 , 'New')
@@ -102,7 +102,7 @@ const insertAccessory = async (req, acc) => {
   const values = [
     acc.code, acc.type, acc.modal_code, acc.Model_Description, acc.Model_Group , 0 , 0
   ];
-  const result = await req.app.get('pool').query(
+  const result = await db.query(
     query,
     values
   );
@@ -111,9 +111,9 @@ const insertAccessory = async (req, acc) => {
 };
 
 
-const findAccessory = async (req,  data) => {
-  console.log(data)
-  const result = await req.app.get('pool').query(`SELECT * FROM accessories 
+const findAccessory = async (req,  data, client = null) => {
+  const db = client || req.app.get('pool');
+  const result = await db.query(`SELECT * FROM accessories 
       WHERE  model=$1 AND model_description= $2 
 	  AND accessory_type=$3 AND accessory_code=$4 AND model_code = $5`, 
     [ data.Model_Group , data.Model_Description, data.type , data.code, data.modal_code]);
@@ -166,7 +166,6 @@ WHERE no = $6 RETURNING *`, [price, duration, type, full_name, short_name, no]);
 };
 
 const getNewAccessory = async (req,  data) => {
-  console.log(data)
   const result = await req.app.get('pool').query(`
     SELECT 	model_code, model, model_description, accessory_type, accessory_code, 
 	    ROUND(price::DECIMAL / 100, 2) AS price
@@ -207,6 +206,66 @@ SELECT
     GROUP BY model_code, model, model_description
   `);
   return result.rows;
+};
+
+const getAccessoriesList = async (req, options = {}) => {
+  const limit = Math.min(Math.max(Number(options.limit) || 10, 1), 100);
+  const offset = Math.max(Number(options.offset) || 0, 0);
+  const search = String(options.search || '').trim();
+  const values = [];
+  let whereSql = '';
+
+  if (search) {
+    values.push(`%${search}%`);
+    whereSql = `
+      WHERE model_code ILIKE $1
+        OR model ILIKE $1
+        OR model_description ILIKE $1
+        OR accessory_type ILIKE $1
+        OR accessory_code ILIKE $1
+        OR full_name ILIKE $1
+        OR short_name ILIKE $1
+        OR type ILIKE $1
+    `;
+  }
+
+  const countResult = await req.app.get('pool').query(
+    `SELECT COUNT(*)::int AS total FROM accessories ${whereSql}`,
+    values
+  );
+
+  values.push(limit, offset);
+  const limitParam = values.length - 1;
+  const offsetParam = values.length;
+
+  const result = await req.app.get('pool').query(`
+    SELECT
+      no,
+      model_code,
+      model,
+      model_description,
+      accessory_type,
+      accessory_code,
+      ROUND(COALESCE(price, 0)::DECIMAL / 100, 2) AS price,
+      duration,
+      type,
+      full_name,
+      short_name,
+      accy_type,
+      status,
+      canzero
+    FROM accessories
+    ${whereSql}
+    ORDER BY no DESC
+    LIMIT $${limitParam} OFFSET $${offsetParam}
+  `, values);
+
+  return {
+    rows: result.rows,
+    total: Number(countResult.rows[0]?.total || 0),
+    limit,
+    offset
+  };
 };
 
 const getAccessoriesByModel = async (req, model_code, model_description) => {
@@ -280,6 +339,7 @@ module.exports = {
   getNewAccessory,
   getNewAccessoryByNo,
   getAccessoryGroup,
+  getAccessoriesList,
   getAccessoriesByModel,
   updateAccessories2Model
 };

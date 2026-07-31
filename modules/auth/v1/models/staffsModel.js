@@ -1,12 +1,20 @@
 require('dotenv').config();
 
+const ensureStaffColumns = async (req) => {
+  await req.app.get('pool').query(`
+    ALTER TABLE staff
+    ADD COLUMN IF NOT EXISTS confirmed_date DATE
+  `);
+};
+
 const insertStaffsModel = async (req, staffs) => {
+  await ensureStaffColumns(req);
   const client = req.db; // assuming `req.db` is pg client
 
   const columns = [
     "staff_id", "name", "ic", "bank_name", "acc_number",
     "nick_name", "type", "photo", "email", "gender",
-    "kwsp_id", "contact"
+    "kwsp_id", "contact", "confirmed_date"
   ];
 
   // Generate placeholders like ($1,$2,...), ($13,$14,...) for each row
@@ -25,7 +33,8 @@ const insertStaffsModel = async (req, staffs) => {
       staff.email,
       staff.gender,
       staff.kwsp_id,
-      staff.contact
+      staff.contact,
+      staff.confirmed_date || null
     );
     return `(${columns.map((_, j) => `$${baseIndex + j + 1}`).join(",")})`;
   }).join(",");
@@ -47,6 +56,7 @@ const insertStaffsModel = async (req, staffs) => {
 };
 
 const getFullStaff = async (req  ) => {
+  await ensureStaffColumns(req);
 
   const query = `SELECT * FROM staff`;
 
@@ -62,6 +72,7 @@ const getFullStaff = async (req  ) => {
 };
 
 const updateStaffBystaff_id = async (req, payload = {}) => {
+  await ensureStaffColumns(req);
   const identifier = payload.no || payload.id || payload.staff_no || payload.staff_id;
   if (!identifier) {
     const err = new Error('Staff identifier (no or staff_id) is required');
@@ -81,6 +92,7 @@ const updateStaffBystaff_id = async (req, payload = {}) => {
     email: payload.email,
     kwsp_id: payload.kwsp_id,
     join_date: payload.join_date,
+    confirmed_date: payload.confirmed_date,
     resign_date: payload.resign_date,
     photo: payload.photo,
     gender: payload.gender
@@ -167,6 +179,7 @@ const updateStaffBystaff_id = async (req, payload = {}) => {
 };
 
 const getStaffById = async (req , staff_id ) => {
+  await ensureStaffColumns(req);
 
   const query = `SELECT * FROM staff WHERE no = $1`;
 
@@ -183,10 +196,12 @@ const getStaffById = async (req , staff_id ) => {
 };
 
 const insertStaff = async (req, staff) => {
+  await ensureStaffColumns(req);
+  const defaultPhoto = 'https://api.dicebear.com/7.x/avataaars/svg?seed=staff';
   const columns = [
     "staff_id", "name", "ic", "bank_name", "acc_number",
     "nick_name", "type", "photo", "email", "gender",
-    "kwsp_id", "contact"
+    "kwsp_id", "contact", "confirmed_date"
   ];
   
 
@@ -203,12 +218,13 @@ const insertStaff = async (req, staff) => {
     staff.bank_name || null,
     staff.acc_number || null,
     staff.nick_name || null,
-    staff.type || null,
-    staff.photo || null,
+    String(staff.type || '').trim(),
+    staff.photo || defaultPhoto,
     staff.email || null,
     staff.gender || null,
     staff.kwsp_id || null,
-    staff.contact || null
+    staff.contact || null,
+    staff.confirmed_date || null
   ];
 
   const result = await req.app.get('pool').query(query, values);
@@ -220,5 +236,6 @@ module.exports = {
   getFullStaff,
   updateStaffBystaff_id,
   getStaffById,
-  insertStaff
+  insertStaff,
+  ensureStaffColumns
 };
