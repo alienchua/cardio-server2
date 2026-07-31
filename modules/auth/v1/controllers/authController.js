@@ -16,8 +16,16 @@ const {
 } = require('../models/userModel');
 require('dotenv').config();
 
+const ACCESS_TOKEN_EXPIRES_IN = '7d';
+const ACCESS_TOKEN_EXPIRES_MS = 7 * 24 * 60 * 60 * 1000;
+const REFRESH_TOKEN_EXPIRES_AT = new Date('9999-12-31T23:59:59.999Z');
+
 const generateToken = (user, expiresIn) => {
-  return jwt.sign({ id: user.id, role: user.role || 'user' }, process.env.JWT_SECRET, { expiresIn });
+  const payload = { id: user.id, role: user.role || 'user' };
+  if (user.type) payload.type = user.type;
+  return expiresIn
+    ? jwt.sign(payload, process.env.JWT_SECRET, { expiresIn })
+    : jwt.sign(payload, process.env.JWT_SECRET);
 };
 
 const register = async (req, res, next) => {
@@ -48,11 +56,11 @@ const register = async (req, res, next) => {
     // await insertRole
 
     console.log(user)
-    const accessToken = generateToken(user, '15m');
-    const refreshToken = generateToken(user, '7d');
+    const accessToken = generateToken(user, ACCESS_TOKEN_EXPIRES_IN);
+    const refreshToken = generateToken(user);
     const createdAt = new Date();
-    const accessTokenExpiresAt = new Date(createdAt.getTime() + 15 * 60 * 1000); // 15 minutes
-    const refreshTokenExpiresAt = new Date(createdAt.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    const accessTokenExpiresAt = new Date(createdAt.getTime() + ACCESS_TOKEN_EXPIRES_MS);
+    const refreshTokenExpiresAt = REFRESH_TOKEN_EXPIRES_AT;
 
     await createAccessToken(req, user.id, accessToken, accessTokenExpiresAt);
     await createRefreshToken(req, user.id, refreshToken, refreshTokenExpiresAt);
@@ -125,11 +133,11 @@ const login = async (req, res, next) => {
         errors: [{ field: 'authentication', message: 'Email or phone number is required' }],
       });
     }
-    const accessToken = generateToken(user, '15m');
-    const refreshToken = generateToken(user, '7d');
+    const accessToken = generateToken(user, ACCESS_TOKEN_EXPIRES_IN);
+    const refreshToken = generateToken(user);
     const createdAt = new Date();
-    const accessTokenExpiresAt = new Date(createdAt.getTime() + 15 * 60 * 1000); // 15 minutes
-    const refreshTokenExpiresAt = new Date(createdAt.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    const accessTokenExpiresAt = new Date(createdAt.getTime() + ACCESS_TOKEN_EXPIRES_MS);
+    const refreshTokenExpiresAt = REFRESH_TOKEN_EXPIRES_AT;
 
     await createAccessToken(req, user.id, accessToken, accessTokenExpiresAt);
     await createRefreshToken(req, user.id, refreshToken, refreshTokenExpiresAt);
@@ -157,10 +165,10 @@ const login = async (req, res, next) => {
 
 const refreshAccessToken = async (req, res, next) => {
   const { token } = req.body;
-  console.log(req.headers)
   try {
 
     if (!token) {
+      console.warn('[auth] Refresh token failed: missing token');
       return res.status(401).json({
         success: false,
         message: 'Authentication Error',
@@ -168,8 +176,45 @@ const refreshAccessToken = async (req, res, next) => {
       });
     }
 
-    if (new Date(token.expires_at) < new Date()) {
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (error) {
+      console.warn('[auth] Refresh token failed: invalid or expired JWT');
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication Error',
+        error: 'Invalid or expired refresh token'
+      });
+    }
+
+    console.log('[auth] Refresh token verified', {
+      userId: decoded.id,
+      role: decoded.role,
+      type: decoded.type || 'user',
+      refreshExpiresAt: decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null
+    });
+
+    const storedRefreshToken = await getRefreshToken(req, token);
+    if (!storedRefreshToken && decoded.type !== 'admin') {
+      console.warn('[auth] Refresh token failed: token not found in database', {
+        userId: decoded.id,
+        role: decoded.role,
+        type: decoded.type || 'user'
+      });
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication Error',
+        error: 'Refresh token not found'
+      });
+    }
+
+    if (storedRefreshToken && new Date(storedRefreshToken.expires_at) < new Date()) {
       await deleteRefreshToken(req, token);
+      console.warn('[auth] Refresh token failed: database token expired', {
+        userId: storedRefreshToken.user_id,
+        expiresAt: storedRefreshToken.expires_at
+      });
       return res.status(401).json({
         success: false,
         message: 'Authentication Error',
@@ -177,11 +222,20 @@ const refreshAccessToken = async (req, res, next) => {
       });
     }
 
-    const user = { id: token.user_id, role: token.role };
-    const accessToken = generateToken(user, '15m');
-    const accessTokenExpiresAt = new Date(new Date().getTime() + 15 * 60 * 1000); // 15 minutes
+    const user = { id: decoded.id || storedRefreshToken?.user_id, role: decoded.role, type: decoded.type };
+    const accessToken = generateToken(user, ACCESS_TOKEN_EXPIRES_IN);
+    const accessTokenExpiresAt = new Date(new Date().getTime() + ACCESS_TOKEN_EXPIRES_MS);
 
-    await createAccessToken(req, user.id, accessToken, accessTokenExpiresAt);
+    if (decoded.type !== 'admin') {
+      await createAccessToken(req, user.id, accessToken, accessTokenExpiresAt);
+    }
+
+    console.log('[auth] Access token refreshed successfully', {
+      userId: user.id,
+      role: user.role,
+      type: user.type || 'user',
+      accessExpiresAt: accessTokenExpiresAt.toISOString()
+    });
 
     res.status(200).json({
       success: true,

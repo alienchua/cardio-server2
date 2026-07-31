@@ -10,6 +10,7 @@ const {
   insertStaff
 } = require('../models/staffsModel');
 const { upsertAttendance } = require('../models/staffAttendanceModel');
+const { uploadBufferToS3 } = require('../../../../utils/s3Upload');
 
 require('dotenv').config();
 
@@ -142,6 +143,10 @@ const updateStaffBay = async (req, res, next) => {
 const uploadStaffAttendance = async (req, res, next) => {
   try {
     const { month, records } = req.body;
+    const numericValue = (value) => {
+      const number = Number(value ?? 0);
+      return Number.isFinite(number) ? number : 0;
+    };
 
     if (!Array.isArray(records) || records.length === 0) {
       return res.status(400).json({
@@ -150,10 +155,48 @@ const uploadStaffAttendance = async (req, res, next) => {
       });
     }
 
+    if (month) {
+      await req.app.get('pool').query(`
+        CREATE TABLE IF NOT EXISTS settlement_month (
+          id BIGSERIAL PRIMARY KEY,
+          month VARCHAR(7) UNIQUE NOT NULL,
+          is_settled BOOLEAN DEFAULT false,
+          settled_at TIMESTAMP WITHOUT TIME ZONE
+        )
+      `);
+
+      await req.app.get('pool').query(`
+        ALTER TABLE settlement_month
+        ALTER COLUMN month TYPE VARCHAR(7)
+        USING LEFT(month::text, 7)
+      `);
+
+      const settled = await req.app.get('pool').query(
+        `SELECT 1 FROM settlement_month WHERE LEFT(month::text, 7) = $1 AND is_settled = true LIMIT 1`,
+        [month]
+      );
+
+      if (settled.rowCount > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `${month} is settled and attendance cannot be changed.`
+        });
+      }
+    }
+
     const normalized = records.map((r) => ({
       staff_id: r.staff_id || r.id,
       month_label: r.month_label || r.month || month,
-      attendance: Number(r.attendance ?? r.attandence ?? 0)
+      attendance: numericValue(r.attendance ?? r.attandence),
+      absent: numericValue(r.absent ?? r.absence),
+      late: numericValue(r.late),
+      mc: numericValue(r.mc),
+      hl: numericValue(r.hl),
+      q: numericValue(r.q),
+      al: numericValue(r.al),
+      el: numericValue(r.el),
+      ul: numericValue(r.ul),
+      cl: numericValue(r.cl)
     })).filter((r) => r.staff_id && r.month_label);
 
     if (normalized.length === 0) {
@@ -181,6 +224,10 @@ const createStaff = async (req, res, next) => {
     return res.status(400).json({ success: false, message: 'Name is required' });
   }
 
+  if (!String(staff.type || '').trim()) {
+    return res.status(400).json({ success: false, message: 'Type/Position is required' });
+  }
+
   try {
     const row = await insertStaff(req, staff);
     res.status(200).json({
@@ -193,11 +240,65 @@ const createStaff = async (req, res, next) => {
   }
 };
 
+const uploadStaffPhoto = async (req, res, next) => {
+  try {
+    const { staff_no, staff_id, file_name, content_type, data_url, base64 } = req.body || {};
+    const identifier = staff_no || staff_id;
+    const contentType = String(content_type || '').toLowerCase();
+    const rawImage = String(data_url || base64 || '');
+
+    if (!identifier) {
+      return res.status(400).json({ success: false, message: 'staff_no or staff_id is required' });
+    }
+
+    if (!contentType.startsWith('image/')) {
+      return res.status(400).json({ success: false, message: 'Only image files are allowed' });
+    }
+
+    const base64Data = rawImage.includes(',')
+      ? rawImage.split(',').pop()
+      : rawImage;
+    const buffer = Buffer.from(base64Data || '', 'base64');
+
+    if (!buffer.length) {
+      return res.status(400).json({ success: false, message: 'Image data is required' });
+    }
+
+    if (buffer.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ success: false, message: 'Image must be 5MB or smaller' });
+    }
+
+    const extensionFromType = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+    const safeFileName = String(file_name || `staff-photo.${extensionFromType}`)
+      .replace(/[^a-zA-Z0-9._-]/g, '-')
+      .slice(-80);
+    const key = `staff/${identifier}/${Date.now()}-${safeFileName || `photo.${extensionFromType}`}`;
+    const upload = await uploadBufferToS3({ key, buffer, contentType });
+    const updated = await updateStaffBystaff_id(req, {
+      no: staff_no,
+      staff_id: staff_id,
+      photo: upload.url
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Staff photo uploaded successfully',
+      data: {
+        photo: upload.url,
+        staff: updated
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   insertStaffs,
   getStaffList,
   updateStaffBy,
   updateStaffBay,
   uploadStaffAttendance,
-  createStaff
+  createStaff,
+  uploadStaffPhoto
 };

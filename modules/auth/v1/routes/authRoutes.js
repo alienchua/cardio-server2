@@ -27,6 +27,7 @@ const {
   updateAccessories2,
   insertAccessories2,
   getAccessoryGroupCtrl,
+  getAccessoriesListCtrl,
   getAccessoriesByModelCtrl} = require('../controllers/accessoriesController');
 
 const { 
@@ -35,7 +36,8 @@ const {
   updateStaffBy,
   updateStaffBay,
   uploadStaffAttendance,
-  createStaff
+  createStaff,
+  uploadStaffPhoto
 } = require('../controllers/staffsController');
 const { 
   getBayListByType,
@@ -52,14 +54,24 @@ const {
   createInstallment,
   getInstallmentCtrl ,
   getInstallmentByNoCtrl,
+  getAdjustmentsBySourceCtrl,
+  updateAdjustmentCtrl,
+  cancelAdjustmentCtrl,
   getSalaryResultByMonth,
   getSalaryDetailByStaff,
   getSalaryVoucherDetail,
   getSalaryVoucherDetailByBay,
+  getSalaryMonthStatus,
+  getSalaryBasePayRulesCtrl,
+  updateSalaryBasePayRulesCtrl,
+  importSalaryFinanceInputs,
+  getSalaryVoucherSummary,
   setSettlement} = require('../controllers/salaryController');
 
 const { 
   insertMasterlistWithAccessories,
+  insertMasterlistWithAccessoriesResolved,
+  checkMasterlistFitmentConflicts,
   repairMasterlistAccessoriesCtrl,
   checkInTask,
   checkOutTask,
@@ -91,6 +103,8 @@ const {
   getCollectScreenCtrl,
   getBayCurrentCheckinCtrl,
   getTaskDetail,
+  updateTaskItemPriceCtrl,
+  getTaskItemPriceHistoryCtrl,
   getBayStaffByNameCtrl,
   createTaskDirectCheckinCtrl,
   changeTaskBayCtrl,
@@ -159,10 +173,16 @@ router.post('/updateStaffBy', updateStaffBy);
 router.post('/getSalaryDetailByStaff', getSalaryDetailByStaff);
 router.post('/getSalaryVoucherDetail', getSalaryVoucherDetail);
 router.post('/getSalaryVoucherDetailByBay', getSalaryVoucherDetailByBay);
+router.post('/getSalaryMonthStatus', getSalaryMonthStatus);
+router.post('/getSalaryBasePayRules', getSalaryBasePayRulesCtrl);
+router.post('/updateSalaryBasePayRules', updateSalaryBasePayRulesCtrl);
+router.post('/importSalaryFinanceInputs', importSalaryFinanceInputs);
+router.post('/getSalaryVoucherSummary', getSalaryVoucherSummary);
 router.post('/updateStaffBay', updateStaffBay);
 router.post('/setSettlement', setSettlement);
 router.post('/uploadStaffAttendance', uploadStaffAttendance);
 router.post('/createStaff', createStaff);
+router.post('/uploadStaffPhoto', uploadStaffPhoto);
 
 
 
@@ -175,10 +195,13 @@ router.post('/getAccessory', getAccessory);
 router.post('/updateAccessories2', updateAccessories2);
 router.post('/insertAccessories2', insertAccessories2);
 router.get('/getAccessoryGroupCtrl', getAccessoryGroupCtrl);
+router.post('/getAccessoriesList', getAccessoriesListCtrl);
 router.post('/getAccessoriesByModel', getAccessoriesByModelCtrl);
 
 //MasterList
+router.post('/checkMasterlistFitmentConflicts', checkMasterlistFitmentConflicts);
 router.post('/insertMasterlistWithAccessories', insertMasterlistWithAccessories);
+router.post('/insertMasterlistWithAccessoriesResolved', insertMasterlistWithAccessoriesResolved);
 router.post('/repairMasterlistAccessories', repairMasterlistAccessoriesCtrl);
 
 // Task
@@ -209,6 +232,8 @@ router.post('/getStandbyListCtrl', getStandbyListCtrl);
 router.get('/getCollectScreenCtrl', getCollectScreenCtrl);
 router.post('/getBayCurrentCheckinCtrl', getBayCurrentCheckinCtrl);
 router.post('/getTaskDetail', getTaskDetail);
+router.post('/updateTaskItemPrice', auth, updateTaskItemPriceCtrl);
+router.post('/getTaskItemPriceHistory', auth, getTaskItemPriceHistoryCtrl);
 router.post('/getBayStaffByName', getBayStaffByNameCtrl);
 router.post('/createTaskDirectCheckin', createTaskDirectCheckinCtrl);
 router.post('/changeTaskBay', changeTaskBayCtrl);
@@ -249,6 +274,9 @@ router.post('/settings/special-car', updateSpecialCarSettingsCtrl);
 router.post('/createInstallment', createInstallment);
 router.get('/getInstallmentCtrl', getInstallmentCtrl);
 router.post('/getInstallmentByNo', getInstallmentByNoCtrl);
+router.post('/getAdjustmentsBySource', getAdjustmentsBySourceCtrl);
+router.post('/updateAdjustment', updateAdjustmentCtrl);
+router.post('/cancelAdjustment', cancelAdjustmentCtrl);
 
 
 module.exports = router;

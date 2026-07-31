@@ -13,6 +13,8 @@ const {
 
 require('dotenv').config();
 
+const ACCESS_TOKEN_EXPIRES_IN = '7d';
+
 const createAdmin = async (req, res, next) => {
   const { username, email, phone, password, role = 'admin' } = req.body;
 
@@ -174,8 +176,8 @@ const adminLogin = async (req, res, next) => {
     }
 
     const payload = { id: admin.id, role: admin.role || 'admin', type: 'admin' };
-    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
-    const refreshToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN });
+    const refreshToken = jwt.sign(payload, process.env.JWT_SECRET);
 
     res.status(200).json({
       success: true,
