@@ -173,6 +173,27 @@ const getSpecialCarModelCodes = async (req) => {
   }
 };
 
+const getSpecialCarModels = async (req) => {
+  const query = `
+    SELECT
+      a.model_code,
+      a.model,
+      a.model_description
+    FROM accessories a
+    WHERE a.model_code IN (
+      SELECT jsonb_array_elements_text(s.special_car)
+      FROM settings s
+      WHERE s.special_car IS NOT NULL
+        AND jsonb_typeof(s.special_car) = 'array'
+    )
+    GROUP BY a.model_code, a.model, a.model_description
+    ORDER BY a.model_code, a.model, a.model_description
+  `;
+
+  const result = await req.app.get('pool').query(query);
+  return result.rows;
+};
+
 const updateSpecialCarModelCodes = async (req, specialCars) => {
   const serialized = JSON.stringify(specialCars || []);
 
@@ -3369,6 +3390,7 @@ module.exports = {
   getTaskbyNo,
   getStaffTaskList,
   getSpecialCarModelCodes,
+  getSpecialCarModels,
   updateSpecialCarModelCodes,
   deleteCheckStaff,
   getPickCheckin,

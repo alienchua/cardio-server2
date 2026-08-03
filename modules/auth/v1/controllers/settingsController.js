@@ -1,5 +1,6 @@
 const {
   getSpecialCarModelCodes,
+  getSpecialCarModels,
   updateSpecialCarModelCodes
 } = require('../models/tasksModel');
 
@@ -10,6 +11,20 @@ const getSpecialCarSettingsCtrl = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Special car settings fetched successfully',
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getSpecialCarModelsCtrl = async (req, res, next) => {
+  try {
+    const result = await getSpecialCarModels(req);
+
+    res.status(200).json({
+      success: true,
+      message: 'Special car models fetched successfully',
       data: result
     });
   } catch (error) {
@@ -50,5 +65,6 @@ const updateSpecialCarSettingsCtrl = async (req, res, next) => {
 
 module.exports = {
   getSpecialCarSettingsCtrl,
+  getSpecialCarModelsCtrl,
   updateSpecialCarSettingsCtrl
 };
