@@ -123,10 +123,15 @@ const findAccessory = async (req,  data, client = null) => {
 
 const updateAccessoryByNO = async (req, price, duration, type, full_name, short_name, no, options = {}) => {
   const pool = req.app.get('pool');
-  const { updateTaskItems = false, taskItemFromDate = null } = options;
+  const { taskItemFromDate = null } = options;
+  console.log(options)
+  const taskItemScope = options.taskItemScope || (options.updateTaskItems ? 'from_date' : 'library');
 
-  if (updateTaskItems && !taskItemFromDate) {
-    throw new Error('task_item_from_date is required when updating task items');
+  if (!['library', 'all', 'from_date'].includes(taskItemScope)) {
+    throw new Error('task_item_scope must be library, all, or from_date');
+  }
+  if (taskItemScope === 'from_date' && !taskItemFromDate) {
+    throw new Error('task_item_from_date is required for from_date scope');
   }
 
   const client = await pool.connect();
@@ -138,7 +143,16 @@ const updateAccessoryByNO = async (req, price, duration, type, full_name, short_
 WHERE no = $6 RETURNING *`, [price, duration, type, full_name, short_name, no]);
 
     let taskItemsUpdatedCount = 0;
-    if (updateTaskItems) {
+    if (taskItemScope === 'all') {
+      const taskItemResult = await client.query(`
+        UPDATE task_item
+        SET price = $1, duration = $2, type = $3, short_name = $4
+        WHERE accessories_id = $5
+        RETURNING no;
+      `, [price, duration, type, short_name, no]);
+
+      taskItemsUpdatedCount = taskItemResult.rowCount;
+    } else if (taskItemScope === 'from_date') {
       const taskItemResult = await client.query(`
         UPDATE task_item ti
         SET price = $1, duration = $2, type = $3, short_name = $4
@@ -146,7 +160,7 @@ WHERE no = $6 RETURNING *`, [price, duration, type, full_name, short_name, no]);
         WHERE ti.accessories_id = $5
           AND ti.masterlist_id = m.no
           AND m.cafi_date::date >= $6::date
-        RETURNING ti.*;
+        RETURNING ti.no;
       `, [price, duration, type, short_name, no, taskItemFromDate]);
 
       taskItemsUpdatedCount = taskItemResult.rowCount;

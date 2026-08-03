@@ -98,14 +98,36 @@ const updateAccessory = async (req, res, next) => {
     full_name,
     short_name,
     no,
+    task_item_scope,
     update_task_items = false,
     task_item_from_date = null
   } = req.body;
 
+  const allowedTaskItemScopes = new Set(['library', 'all', 'from_date']);
+  const taskItemScope = task_item_scope === undefined
+    ? (update_task_items === true ? 'from_date' : 'library')
+    : task_item_scope;
+
+  if (!no) {
+    return res.status(400).json({ success: false, message: 'Accessory no is required' });
+  }
+  if (!Number.isFinite(Number(price)) || Number(price) < 0) {
+    return res.status(400).json({ success: false, message: 'Price must be a non-negative number' });
+  }
+  if (!Number.isFinite(Number(duration)) || Number(duration) < 0) {
+    return res.status(400).json({ success: false, message: 'Duration must be a non-negative number' });
+  }
+  if (!allowedTaskItemScopes.has(taskItemScope)) {
+    return res.status(400).json({ success: false, message: 'task_item_scope must be library, all, or from_date' });
+  }
+  if (taskItemScope === 'from_date' && !/^\d{4}-\d{2}-\d{2}$/.test(String(task_item_from_date || ''))) {
+    return res.status(400).json({ success: false, message: 'task_item_from_date is required in YYYY-MM-DD format for from_date scope' });
+  }
+
   try {
 
     const result = await updateAccessoryByNO(req, price, duration, type, full_name, short_name, no, {
-      updateTaskItems: update_task_items === true,
+      taskItemScope,
       taskItemFromDate: task_item_from_date
     });
 
