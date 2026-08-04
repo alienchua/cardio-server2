@@ -122,6 +122,7 @@ const {
   addCheckinStaffCtrl} = require('../controllers/tasksController');
 const {
   getSpecialCarSettingsCtrl,
+  getSpecialCarModelsCtrl,
   updateSpecialCarSettingsCtrl
 } = require('../controllers/settingsController');
   
@@ -268,6 +269,7 @@ router.post('/getStockCheckListToday', auth, getStockCheckListToday);
 router.post('/updatecheckInTask', updatecheckInTask);
 router.get('/getCurrentCheckInCtrl', getCurrentCheckInCtrl);
 router.get('/settings/special-car', getSpecialCarSettingsCtrl);
+router.get('/settings/special-car/models', getSpecialCarModelsCtrl);
 router.post('/settings/special-car', updateSpecialCarSettingsCtrl);
 
 // installment
