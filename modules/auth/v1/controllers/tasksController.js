@@ -96,12 +96,14 @@ const {
 const {
   selectBayStaff,
   selectBayByName,
+  selectBayById,
   getBayStaffDetailByBayId
 } = require('../models/bayModel');
 const {
   getStaffById
 } = require('../models/staffsModel');
 const { broadcastToTopic, broadcastToTopics } = require('../../../realtime/v1/config/websocketConfig');
+const { canCheckInToBay } = require('../utils/bayStaffGuard');
 
 require('dotenv').config();
 
@@ -512,7 +514,23 @@ const checkInTask = async (req, res, next) => {
       });
     }
  
+    const bayStaff = await selectBayStaff(req, bay_id);
+    const selectedBayRecord = await selectBayById(req, bay_id);
+
+    if (!selectedBayRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected bay was not found. Please choose another bay."
+      });
+    }
+
     if(status === 'Check-In'){
+      if (!canCheckInToBay(selectedBayRecord.name, bayStaff)) {
+        return res.status(400).json({
+          success: false,
+          message: "Selected bay has no staff assigned. Please choose a staffed bay or E1."
+        });
+      }
       
       const checkNumber = await checkCheckinNumber(req, bay_id );
   
@@ -538,8 +556,6 @@ const checkInTask = async (req, res, next) => {
 
    
     const result = await insertCheckIN(req, serachMaster.no , 4 , bay_id , status, effectiveType);
-
-    const bayStaff = await selectBayStaff(req, bay_id);
 
     for (const staff of bayStaff) {
       await insertCheckInStaff(req, result.no, staff.staff_id , staff.type);

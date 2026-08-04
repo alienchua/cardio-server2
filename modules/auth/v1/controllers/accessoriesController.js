@@ -117,6 +117,9 @@ const updateAccessory = async (req, res, next) => {
   if (!Number.isFinite(Number(duration)) || Number(duration) < 0) {
     return res.status(400).json({ success: false, message: 'Duration must be a non-negative number' });
   }
+  if (!['FITMENT', 'HOIST', 'EXCLUDED'].includes(type)) {
+    return res.status(400).json({ success: false, message: 'Type must be FITMENT, HOIST, or EXCLUDED' });
+  }
   if (!allowedTaskItemScopes.has(taskItemScope)) {
     return res.status(400).json({ success: false, message: 'task_item_scope must be library, all, or from_date' });
   }

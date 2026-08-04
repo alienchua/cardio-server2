@@ -262,6 +262,14 @@ const selectBayByName = async (req , name) => {
   return result.rows[0];
 };
 
+const selectBayById = async (req, bayId) => {
+  const result = await req.app.get('pool').query(
+    'SELECT * FROM bay WHERE no = $1',
+    [bayId]
+  );
+  return result.rows[0];
+};
+
 const getBayStaffDetailByBayId = async (req, bay_id) => {
   const query = `
     SELECT
@@ -529,6 +537,7 @@ module.exports = {
   quickFromBay,
   clearBayStaffByBayId,
   selectBayByName,
+  selectBayById,
   getBayStaffDetailByBayId,
   getBayCurrentByStaffId,
   removeStaffByStaffId,
