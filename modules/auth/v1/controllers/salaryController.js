@@ -405,10 +405,17 @@ const importSalaryFinanceInputs = async (req, res, next) => {
   const { month, rows } = req.body;
 
   try {
-    if (!month || !Array.isArray(rows) || rows.length === 0) {
+    if (!hasPayrollAccess(req, res)) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
       return res.status(400).json({
         success: false,
-        message: 'month and rows are required'
+        message: 'A valid month in YYYY-MM format is required'
+      });
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Finance rows are required'
       });
     }
 

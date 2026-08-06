@@ -180,7 +180,7 @@ router.post('/getSalaryVoucherDetailByBay', getSalaryVoucherDetailByBay);
 router.post('/getSalaryMonthStatus', getSalaryMonthStatus);
 router.post('/getSalaryBasePayRules', getSalaryBasePayRulesCtrl);
 router.post('/updateSalaryBasePayRules', updateSalaryBasePayRulesCtrl);
-router.post('/importSalaryFinanceInputs', importSalaryFinanceInputs);
+router.post('/importSalaryFinanceInputs', auth, importSalaryFinanceInputs);
 router.post('/getSalaryAbsenceExceptions', auth, getSalaryAbsenceExceptionsCtrl);
 router.post('/upsertSalaryAbsenceException', auth, upsertSalaryAbsenceExceptionCtrl);
 router.post('/revokeSalaryAbsenceException', auth, revokeSalaryAbsenceExceptionCtrl);

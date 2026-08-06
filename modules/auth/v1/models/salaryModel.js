@@ -1444,7 +1444,7 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
         money(input.sip),
         money(input.pcb),
         money(input.defect_part_tools),
-        money(input.attendance_absenteeism),
+        0,
         money(input.incentive_deduction),
         money(input.incentive_addition),
         money(input.deposit),
