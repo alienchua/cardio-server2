@@ -570,6 +570,25 @@ const ensureSalaryFinanceTables = async (req) => {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS salary_absence_exception_audit (
+        id BIGSERIAL PRIMARY KEY,
+        exception_id BIGINT NOT NULL REFERENCES salary_absence_exceptions(id),
+        month VARCHAR(7) NOT NULL,
+        staff_no BIGINT NOT NULL REFERENCES staff(no),
+        action VARCHAR(20) NOT NULL,
+        waive_deduction BOOLEAN NOT NULL,
+        special_remark TEXT NOT NULL,
+        action_by BIGINT,
+        action_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_salary_absence_exception_audit_lookup
+      ON salary_absence_exception_audit (month, staff_no, action_at DESC)
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS salary_base_pay_rules (
         id BIGSERIAL PRIMARY KEY,
         month VARCHAR(7) NOT NULL,
@@ -1269,6 +1288,17 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
       [item.month, item.staff_no, item.special_remark, actorId]
     );
 
+    await client.query(
+      `
+        INSERT INTO salary_absence_exception_audit (
+          exception_id, month, staff_no, action, waive_deduction,
+          special_remark, action_by, action_at
+        )
+        VALUES ($1, $2, $3, 'saved', true, $4, $5, NOW())
+      `,
+      [result.rows[0].id, item.month, item.staff_no, item.special_remark, actorId]
+    );
+
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) {
@@ -1312,6 +1342,17 @@ const revokeSalaryAbsenceException = async (req, input, actorId = null) => {
       [month, staffNo, actorId]
     );
     if (result.rowCount === 0) throw errorWithStatus('Active absence exception not found', 404);
+
+    await client.query(
+      `
+        INSERT INTO salary_absence_exception_audit (
+          exception_id, month, staff_no, action, waive_deduction,
+          special_remark, action_by, action_at
+        )
+        VALUES ($1, $2, $3, 'revoked', false, $4, $5, NOW())
+      `,
+      [result.rows[0].id, month, staffNo, result.rows[0].special_remark, actorId]
+    );
 
     await client.query('COMMIT');
     return result.rows[0];
