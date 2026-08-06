@@ -96,14 +96,16 @@ const getSalaryResultByMonth = async (req, res, next) => {
 
       return {
         ...row,
-        absence_exception: absenceException,
-        deductible_absent: row.is_settlement_snapshot
+        absence_exception: absenceException
+          ? { active: true, waive_deduction: true }
+          : null,
+        deductible_absent: row.is_settlement_snapshot && row.deductible_absent != null
           ? Number(row.deductible_absent || 0)
           : getDeductibleAbsentDays(row.absent, absenceException),
-        normal_absenteeism_deduction: row.is_settlement_snapshot
+        normal_absenteeism_deduction: row.is_settlement_snapshot && row.normal_absenteeism_deduction != null
           ? Number(row.normal_absenteeism_deduction || 0)
           : getAttendanceAbsenteeism(production, row.absent, null),
-        attendance_absenteeism: row.is_settlement_snapshot
+        attendance_absenteeism: row.is_settlement_snapshot && row.attendance_absenteeism != null
           ? Number(row.attendance_absenteeism || 0)
           : getAttendanceAbsenteeism(production, row.absent, absenceException)
       };
@@ -461,13 +463,13 @@ const getSalaryAbsenceExceptionsCtrl = async (req, res, next) => {
           staff_name: row.nick_name || row.name || row.staff_name || '',
           absent: Number(row.absent || 0),
           total_production: production,
-          deductible_absent: row.is_settlement_snapshot
+          deductible_absent: row.is_settlement_snapshot && row.deductible_absent != null
             ? Number(row.deductible_absent || 0)
             : getDeductibleAbsentDays(row.absent, absenceException),
-          normal_absenteeism_deduction: row.is_settlement_snapshot
+          normal_absenteeism_deduction: row.is_settlement_snapshot && row.normal_absenteeism_deduction != null
             ? Number(row.normal_absenteeism_deduction || 0)
             : getAttendanceAbsenteeism(production, row.absent, null),
-          attendance_absenteeism: row.is_settlement_snapshot
+          attendance_absenteeism: row.is_settlement_snapshot && row.attendance_absenteeism != null
             ? Number(row.attendance_absenteeism || 0)
             : getAttendanceAbsenteeism(production, row.absent, absenceException),
           absence_exception: absenceException
@@ -544,7 +546,9 @@ const getSalaryVoucherSummary = async (req, res, next) => {
     const adjustment = adjustmentsByStaff[Number(staff.no)] || {};
     const absenceException = snapshot?.absence_exception || await getSalaryAbsenceException(req, month, staff.no);
 
-    const production = snapshot ? Number(snapshot.production || 0) : getStaffTaskProduction(tasks);
+    const production = snapshot
+      ? Number(snapshot.total_pay_out ?? (Number(snapshot.total_com || 0) / 100))
+      : getStaffTaskProduction(tasks);
     const salaryTotals = snapshot
       ? {
           attendance: Number(snapshot.attendance || 0),
@@ -562,18 +566,30 @@ const getSalaryVoucherSummary = async (req, res, next) => {
           production: Number(snapshot.production || 0),
           systemDeduction: Number(snapshot.system_deduction || 0),
           absenceException,
-          deductibleAbsent: Number(snapshot.deductible_absent || 0),
-          normalAbsenteeismDeduction: Number(snapshot.normal_absenteeism_deduction || 0),
-          attendanceAbsenteeism: Number(snapshot.attendance_absenteeism || 0),
+          deductibleAbsent: snapshot.deductible_absent != null
+            ? Number(snapshot.deductible_absent || 0)
+            : getDeductibleAbsentDays(snapshot.absent, absenceException),
+          normalAbsenteeismDeduction: snapshot.normal_absenteeism_deduction != null
+            ? Number(snapshot.normal_absenteeism_deduction || 0)
+            : getAttendanceAbsenteeism(production, snapshot.absent, null),
+          attendanceAbsenteeism: snapshot.attendance_absenteeism != null
+            ? Number(snapshot.attendance_absenteeism || 0)
+            : getAttendanceAbsenteeism(production, snapshot.absent, absenceException),
           totals: {
-            ...buildSalaryTotals({ salaryRow: snapshot, finance, production: Number(snapshot.production || 0), basePayRules, absenceException }).totals,
+            ...buildSalaryTotals({ salaryRow: snapshot, finance, production, basePayRules, absenceException }).totals,
             contractor_amount: Number(snapshot.base_pay || 0),
             final_balance_payment: Number(snapshot.final_balance_payment || 0),
-            total_pay_out: Number(snapshot.production || 0),
-            deductible_absent: Number(snapshot.deductible_absent || 0),
-            normal_absenteeism_deduction: Number(snapshot.normal_absenteeism_deduction || 0),
-            attendance_absenteeism: Number(snapshot.attendance_absenteeism || 0),
-            nett_production: asMoney(Number(snapshot.production || 0) - asMoney(Number(snapshot.base_pay || 0) * 0.11))
+            total_pay_out: Number(snapshot.total_pay_out ?? production),
+            deductible_absent: snapshot.deductible_absent != null
+              ? Number(snapshot.deductible_absent || 0)
+              : getDeductibleAbsentDays(snapshot.absent, absenceException),
+            normal_absenteeism_deduction: snapshot.normal_absenteeism_deduction != null
+              ? Number(snapshot.normal_absenteeism_deduction || 0)
+              : getAttendanceAbsenteeism(production, snapshot.absent, null),
+            attendance_absenteeism: snapshot.attendance_absenteeism != null
+              ? Number(snapshot.attendance_absenteeism || 0)
+              : getAttendanceAbsenteeism(production, snapshot.absent, absenceException),
+            nett_production: asMoney(production - asMoney(Number(snapshot.base_pay || 0) * 0.11))
           }
         }
       : buildSalaryTotals({ salaryRow, finance, adjustment, production, basePayRules, absenceException });
@@ -629,6 +645,7 @@ const setSettlement = async (req, res, next) => {
   let lockClient;
 
   try {
+    if (!hasPayrollAccess(req, res)) return;
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
       return res.status(400).json({ success: false, message: 'A valid month in YYYY-MM format is required' });
     }

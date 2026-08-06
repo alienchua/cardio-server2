@@ -540,9 +540,9 @@ const ensureSalaryFinanceTables = async (req) => {
       ADD COLUMN IF NOT EXISTS el NUMERIC(8,2) DEFAULT 0,
       ADD COLUMN IF NOT EXISTS ul NUMERIC(8,2) DEFAULT 0,
       ADD COLUMN IF NOT EXISTS cl NUMERIC(8,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS deductible_absent NUMERIC(8,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS normal_absenteeism_deduction NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS attendance_absenteeism NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS deductible_absent NUMERIC(8,2),
+      ADD COLUMN IF NOT EXISTS normal_absenteeism_deduction NUMERIC(14,2),
+      ADD COLUMN IF NOT EXISTS attendance_absenteeism NUMERIC(14,2),
       ADD COLUMN IF NOT EXISTS absence_exception JSONB
     `);
 
