@@ -1405,7 +1405,7 @@ SELECT
   to_char(DATE(m.caout_date), 'YYYY-MM-DD') AS caout_date,
   m.accessories_std,
     (
-    SELECT json_agg(json_build_object('nick_name', s.nick_name))
+    SELECT json_agg(json_build_object('nick_name', s.nick_name) ORDER BY cs.staff_id ASC)
     FROM checkin_staff cs
     LEFT JOIN staff s ON s.no = cs.staff_id
     WHERE cs.checkin_id = c.no
