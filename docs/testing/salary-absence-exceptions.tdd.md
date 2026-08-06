@@ -47,3 +47,6 @@ Journeys and acceptance criteria were derived from the client request in the Cod
 - `6e55bac` — GREEN calculation/validation implementation.
 - `4f8056a` — RED persistence contract.
 - `b102ac0` — GREEN persistence, API, and settlement implementation.
+- `d38d797` — Backward-compatible snapshot and authenticated settlement hardening.
+- Frontend `d9f11e1` — Salary List exception tab and voucher integration.
+- `879ac90` — Append-only save/revoke audit history.
