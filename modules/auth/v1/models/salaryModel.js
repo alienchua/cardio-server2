@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+const { normalizeAbsenceExceptionInput, errorWithStatus } = require('../utils/salaryAbsenceException');
+
 const SALARY_EXCLUDED_STAFF_IDS = ['01111', '01112', '01113'];
 const DEFAULT_BASE_PAY_RULES = [
   { min_days: 0, amount: 0 },
@@ -103,6 +105,10 @@ const getSalarySnapshotRows = async (req, month) => {
         system_deduction,
         final_balance_payment,
         total_pay_out,
+        deductible_absent,
+        normal_absenteeism_deduction,
+        attendance_absenteeism,
+        absence_exception,
         finance,
         true AS is_settlement_snapshot
       FROM salary_settlement_snapshot
@@ -533,7 +539,34 @@ const ensureSalaryFinanceTables = async (req) => {
       ADD COLUMN IF NOT EXISTS al NUMERIC(8,2) DEFAULT 0,
       ADD COLUMN IF NOT EXISTS el NUMERIC(8,2) DEFAULT 0,
       ADD COLUMN IF NOT EXISTS ul NUMERIC(8,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS cl NUMERIC(8,2) DEFAULT 0
+      ADD COLUMN IF NOT EXISTS cl NUMERIC(8,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS deductible_absent NUMERIC(8,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS normal_absenteeism_deduction NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS attendance_absenteeism NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS absence_exception JSONB
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS salary_absence_exceptions (
+        id BIGSERIAL PRIMARY KEY,
+        month VARCHAR(7) NOT NULL,
+        staff_no BIGINT NOT NULL REFERENCES staff(no),
+        waive_deduction BOOLEAN NOT NULL DEFAULT true,
+        special_remark TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_by BIGINT,
+        updated_by BIGINT,
+        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+        revoked_at TIMESTAMP WITHOUT TIME ZONE,
+        revoked_by BIGINT,
+        UNIQUE (month, staff_no)
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_salary_absence_exceptions_month_status
+      ON salary_absence_exceptions (month, status)
     `);
 
     await client.query(`
@@ -1112,7 +1145,11 @@ const getSalaryMonthStatusData = async (req, month) => {
         COALESCE((
           SELECT COUNT(*)::int FROM salary_finance_inputs
           WHERE LEFT(month::text, 7) = $1
-        ), 0) AS finance_count
+        ), 0) AS finance_count,
+        COALESCE((
+          SELECT COUNT(*)::int FROM salary_absence_exceptions
+          WHERE month = $1 AND status = 'active'
+        ), 0) AS absence_exception_count
     `,
     [month]
   );
@@ -1121,6 +1158,7 @@ const getSalaryMonthStatusData = async (req, month) => {
   const isSettled = Boolean(row.is_settled);
   const financeCount = Number(row.finance_count || 0);
   const attendanceCount = Number(row.attendance_count || 0);
+  const absenceExceptionCount = Number(row.absence_exception_count || 0);
   const status = isSettled
     ? 'Settled'
     : financeCount > 0
@@ -1134,8 +1172,155 @@ const getSalaryMonthStatusData = async (req, month) => {
     status,
     is_settled: isSettled,
     attendance_count: attendanceCount,
-    finance_count: financeCount
+    finance_count: financeCount,
+    absence_exception_count: absenceExceptionCount
   };
+};
+
+const getSalaryAbsenceExceptions = async (req, month, staffNo = null) => {
+  await ensureSalaryFinanceTables(req);
+
+  const values = [month];
+  const staffFilter = staffNo == null ? '' : `AND sae.staff_no = $2`;
+  if (staffNo != null) values.push(Number(staffNo));
+
+  const result = await req.app.get('pool').query(
+    `
+      SELECT
+        sae.*,
+        s.staff_id,
+        COALESCE(s.nick_name, s.name, '') AS staff_name,
+        COALESCE(sa.absent, 0)::numeric AS absent
+      FROM salary_absence_exceptions sae
+      JOIN staff s ON s.no = sae.staff_no
+      LEFT JOIN staff_attendance sa
+        ON sa.staff_id = sae.staff_no
+        AND LEFT(sa.month_label::text, 7) = sae.month
+      WHERE sae.month = $1
+        AND sae.status = 'active'
+        ${staffFilter}
+      ORDER BY s.staff_id, sae.staff_no
+    `,
+    values
+  );
+
+  return result.rows;
+};
+
+const getSalaryAbsenceException = async (req, month, staffNo) => {
+  const rows = await getSalaryAbsenceExceptions(req, month, staffNo);
+  return rows[0] || null;
+};
+
+const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
+  await ensureSalaryFinanceTables(req);
+  const item = normalizeAbsenceExceptionInput(input);
+  const client = await req.app.get('pool').connect();
+
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`salary-settlement:${item.month}`]);
+
+    const settled = await client.query(
+      `SELECT 1 FROM settlement_month WHERE month = $1 AND is_settled = true LIMIT 1`,
+      [item.month]
+    );
+    if (settled.rowCount > 0) {
+      throw errorWithStatus(`${item.month} is settled and absence exceptions cannot be changed.`);
+    }
+
+    const attendance = await client.query(
+      `
+        SELECT s.no, COALESCE(sa.absent, 0)::numeric AS absent
+        FROM staff s
+        LEFT JOIN staff_attendance sa
+          ON sa.staff_id = s.no
+          AND LEFT(sa.month_label::text, 7) = $1
+        WHERE s.no = $2
+        LIMIT 1
+      `,
+      [item.month, item.staff_no]
+    );
+    if (attendance.rowCount === 0) {
+      throw errorWithStatus('Staff not found', 404);
+    }
+    if (Number(attendance.rows[0].absent || 0) <= 0) {
+      throw errorWithStatus('An absence exception requires at least one absent day');
+    }
+
+    const result = await client.query(
+      `
+        INSERT INTO salary_absence_exceptions (
+          month, staff_no, waive_deduction, special_remark, status,
+          created_by, updated_by, created_at, updated_at, revoked_at, revoked_by
+        )
+        VALUES ($1, $2, true, $3, 'active', $4, $4, NOW(), NOW(), NULL, NULL)
+        ON CONFLICT (month, staff_no)
+        DO UPDATE SET
+          waive_deduction = true,
+          special_remark = EXCLUDED.special_remark,
+          status = 'active',
+          updated_by = EXCLUDED.updated_by,
+          updated_at = NOW(),
+          revoked_at = NULL,
+          revoked_by = NULL
+        RETURNING *
+      `,
+      [item.month, item.staff_no, item.special_remark, actorId]
+    );
+
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const revokeSalaryAbsenceException = async (req, input, actorId = null) => {
+  const month = String(input?.month || '').trim();
+  const staffNo = Number(input?.staff_no);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw errorWithStatus('A valid month in YYYY-MM format is required');
+  if (!Number.isInteger(staffNo) || staffNo <= 0) throw errorWithStatus('A valid staff number is required');
+
+  await ensureSalaryFinanceTables(req);
+  const client = await req.app.get('pool').connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`salary-settlement:${month}`]);
+    const settled = await client.query(
+      `SELECT 1 FROM settlement_month WHERE month = $1 AND is_settled = true LIMIT 1`,
+      [month]
+    );
+    if (settled.rowCount > 0) {
+      throw errorWithStatus(`${month} is settled and absence exceptions cannot be changed.`);
+    }
+
+    const result = await client.query(
+      `
+        UPDATE salary_absence_exceptions
+        SET status = 'revoked',
+            updated_by = $3,
+            updated_at = NOW(),
+            revoked_at = NOW(),
+            revoked_by = $3
+        WHERE month = $1 AND staff_no = $2 AND status = 'active'
+        RETURNING *
+      `,
+      [month, staffNo, actorId]
+    );
+    if (result.rowCount === 0) throw errorWithStatus('Active absence exception not found', 404);
+
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 const getFinanceInputByStaff = async (req, month, staffNo) => {
@@ -1317,14 +1502,16 @@ const insertSettlement = async (req , month, snapshotRows = [] ) => {
             staff_type, photo, total_com, total_deduct, total_installment, attendance, absent,
             late, mc, hl, q, al, el, ul, cl,
             base_pay, production, system_deduction, final_balance_payment, total_pay_out,
-            finance, snapshot_at
+            deductible_absent, normal_absenteeism_deduction, attendance_absenteeism,
+            absence_exception, finance, snapshot_at
           )
           VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9,
             $10, $11, $12, $13, $14, $15, $16,
             $17, $18, $19, $20, $21, $22, $23, $24,
             $25, $26, $27, $28, $29,
-            $30::jsonb, NOW()
+            $30, $31, $32,
+            $33::jsonb, $34::jsonb, NOW()
           )
           ON CONFLICT (month, staff_no)
           DO UPDATE SET
@@ -1355,6 +1542,10 @@ const insertSettlement = async (req , month, snapshotRows = [] ) => {
             system_deduction = EXCLUDED.system_deduction,
             final_balance_payment = EXCLUDED.final_balance_payment,
             total_pay_out = EXCLUDED.total_pay_out,
+            deductible_absent = EXCLUDED.deductible_absent,
+            normal_absenteeism_deduction = EXCLUDED.normal_absenteeism_deduction,
+            attendance_absenteeism = EXCLUDED.attendance_absenteeism,
+            absence_exception = EXCLUDED.absence_exception,
             finance = EXCLUDED.finance,
             snapshot_at = EXCLUDED.snapshot_at
         `,
@@ -1388,6 +1579,10 @@ const insertSettlement = async (req , month, snapshotRows = [] ) => {
           row.system_deduction,
           row.final_balance_payment,
           row.total_pay_out,
+          row.deductible_absent,
+          row.normal_absenteeism_deduction,
+          row.attendance_absenteeism,
+          JSON.stringify(row.absence_exception || null),
           JSON.stringify(row.finance || {})
         ]
       );
@@ -1417,6 +1612,10 @@ module.exports = {
   insertSettlement,
   getSalaryDetailByBay,
   getSalaryMonthStatusData,
+  getSalaryAbsenceExceptions,
+  getSalaryAbsenceException,
+  upsertSalaryAbsenceException,
+  revokeSalaryAbsenceException,
   getFinanceInputByStaff,
   getSalarySnapshotByStaff,
   getSalarySnapshotRows,
