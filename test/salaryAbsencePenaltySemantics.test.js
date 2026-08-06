@@ -22,14 +22,19 @@ test('waives the whole penalty without changing actual absent days', () => {
   assert.equal(getAttendanceAbsenteeism(1000, 4, exception), 0);
 });
 
-test('does not accept partial approved-day decisions', () => {
-  assert.throws(() => normalizeAbsenceExceptionInput({
+test('stores a do-not-waive decision and ignores obsolete approved-day fields', () => {
+  assert.deepEqual(normalizeAbsenceExceptionInput({
     month: '2026-08',
     staff_no: 42,
     waive_deduction: false,
     approved_absent_days: 3,
     special_remark: 'Incorrect partial decision'
-  }), /waive_deduction must be true/);
+  }), {
+    month: '2026-08',
+    staff_no: 42,
+    waive_deduction: false,
+    special_remark: 'Incorrect partial decision'
+  });
 });
 
 test('keeps every normal penalty band when no waiver exists', () => {
@@ -46,13 +51,13 @@ test('rejects an invalid staff number', () => {
   }), /valid staff number/);
 });
 
-test('exception persistence stores a binary penalty waiver', () => {
+test('exception persistence stores the selected binary penalty decision', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '..', 'modules', 'auth', 'v1', 'models', 'salaryModel.js'),
     'utf8'
   );
   const upsert = source.match(/const upsertSalaryAbsenceException[\s\S]*?\n};/)?.[0] || '';
 
-  assert.match(upsert, /VALUES \(\$1, \$2, true/);
+  assert.match(upsert, /item\.waive_deduction/);
   assert.doesNotMatch(upsert, /approvedAbsentDays > actualAbsentDays/);
 });

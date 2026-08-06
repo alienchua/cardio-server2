@@ -57,15 +57,20 @@ test('rejects an invalid month', () => {
   );
 });
 
-test('requires a special remark when deduction is waived', () => {
-  assert.throws(
-    () => normalizeAbsenceExceptionInput({
+test('allows an empty special remark when deduction is waived', () => {
+  assert.deepEqual(
+    normalizeAbsenceExceptionInput({
       month: '2026-08',
       staff_no: 42,
       waive_deduction: true,
       special_remark: '   '
     }),
-    /Special Remark is required/
+    {
+      month: '2026-08',
+      staff_no: 42,
+      waive_deduction: true,
+      special_remark: ''
+    }
   );
 });
 

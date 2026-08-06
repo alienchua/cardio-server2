@@ -1179,7 +1179,7 @@ const getSalaryMonthStatusData = async (req, month) => {
         ), 0) AS finance_count,
         COALESCE((
           SELECT COUNT(*)::int FROM salary_absence_exceptions
-          WHERE month = $1 AND status = 'active' AND waive_deduction = true
+          WHERE month = $1 AND status = 'active'
         ), 0) AS absence_exception_count
     `,
     [month]
@@ -1229,7 +1229,6 @@ const getSalaryAbsenceExceptions = async (req, month, staffNo = null) => {
         AND LEFT(sa.month_label::text, 7) = sae.month
       WHERE sae.month = $1
         AND sae.status = 'active'
-        AND sae.waive_deduction = true
         ${staffFilter}
       ORDER BY s.staff_id, sae.staff_no
     `,
@@ -1286,10 +1285,10 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
           month, staff_no, waive_deduction, approved_absent_days, special_remark, status,
           created_by, updated_by, created_at, updated_at, revoked_at, revoked_by
         )
-        VALUES ($1, $2, true, NULL, $3, 'active', $4, $4, NOW(), NOW(), NULL, NULL)
+        VALUES ($1, $2, $3, NULL, $4, 'active', $5, $5, NOW(), NOW(), NULL, NULL)
         ON CONFLICT (month, staff_no)
         DO UPDATE SET
-          waive_deduction = true,
+          waive_deduction = EXCLUDED.waive_deduction,
           approved_absent_days = NULL,
           special_remark = EXCLUDED.special_remark,
           status = 'active',
@@ -1299,7 +1298,7 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
           revoked_by = NULL
         RETURNING *
       `,
-      [item.month, item.staff_no, item.special_remark, actorId]
+      [item.month, item.staff_no, item.waive_deduction, item.special_remark, actorId]
     );
 
     await client.query(
@@ -1308,9 +1307,9 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
           exception_id, month, staff_no, action, waive_deduction,
           approved_absent_days, special_remark, action_by, action_at
         )
-        VALUES ($1, $2, $3, 'saved', true, NULL, $4, $5, NOW())
+        VALUES ($1, $2, $3, 'saved', $4, NULL, $5, $6, NOW())
       `,
-      [result.rows[0].id, item.month, item.staff_no, item.special_remark, actorId]
+      [result.rows[0].id, item.month, item.staff_no, item.waive_deduction, item.special_remark, actorId]
     );
 
     await client.query('COMMIT');

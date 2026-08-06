@@ -26,7 +26,7 @@ test('loads active monthly absence exceptions with staff and attendance context'
     query: async (sql, values) => {
       assert.match(sql, /FROM salary_absence_exceptions sae/);
       assert.match(sql, /sae\.status = 'active'/);
-      assert.match(sql, /sae\.waive_deduction = true/);
+      assert.doesNotMatch(sql, /sae\.waive_deduction = true/);
       assert.deepEqual(values, ['2026-08']);
       return { rows: expected };
     }
