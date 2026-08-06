@@ -32,6 +32,16 @@ test('clamps approved days to actual absence', () => {
   assert.equal(getDeductibleAbsentDays(2, exception), 0);
 });
 
+test('keeps the normal deduction when an active record approves no days', () => {
+  const exception = {
+    status: 'active',
+    waive_deduction: false,
+    approved_absent_days: null
+  };
+
+  assert.equal(getDeductibleAbsentDays(2, exception), 2);
+});
+
 test('normalizes approved absent days for an audited exception', () => {
   assert.deepEqual(normalizeAbsenceExceptionInput({
     month: '2026-08',
@@ -56,6 +66,22 @@ test('rejects zero or invalid approved absent days', () => {
       special_remark: 'Approved by management'
     }), /Approved absent days/);
   }
+});
+
+test('rejects invalid staff numbers and empty legacy waiver decisions', () => {
+  assert.throws(() => normalizeAbsenceExceptionInput({
+    month: '2026-08',
+    staff_no: 0,
+    approved_absent_days: 1,
+    special_remark: 'Approved by management'
+  }), /valid staff number/);
+
+  assert.throws(() => normalizeAbsenceExceptionInput({
+    month: '2026-08',
+    staff_no: 42,
+    waive_deduction: false,
+    special_remark: 'Approved by management'
+  }), /waive_deduction must be true/);
 });
 
 test('persists approved days in exception and audit records', () => {

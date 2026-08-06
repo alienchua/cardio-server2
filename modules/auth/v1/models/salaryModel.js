@@ -552,6 +552,7 @@ const ensureSalaryFinanceTables = async (req) => {
         month VARCHAR(7) NOT NULL,
         staff_no BIGINT NOT NULL REFERENCES staff(no),
         waive_deduction BOOLEAN NOT NULL DEFAULT true,
+        approved_absent_days NUMERIC(8,2),
         special_remark TEXT NOT NULL,
         status VARCHAR(20) NOT NULL DEFAULT 'active',
         created_by BIGINT,
@@ -562,6 +563,11 @@ const ensureSalaryFinanceTables = async (req) => {
         revoked_by BIGINT,
         UNIQUE (month, staff_no)
       )
+    `);
+
+    await client.query(`
+      ALTER TABLE salary_absence_exceptions
+      ADD COLUMN IF NOT EXISTS approved_absent_days NUMERIC(8,2)
     `);
 
     await client.query(`
@@ -577,10 +583,16 @@ const ensureSalaryFinanceTables = async (req) => {
         staff_no BIGINT NOT NULL REFERENCES staff(no),
         action VARCHAR(20) NOT NULL,
         waive_deduction BOOLEAN NOT NULL,
+        approved_absent_days NUMERIC(8,2),
         special_remark TEXT NOT NULL,
         action_by BIGINT,
         action_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
       )
+    `);
+
+    await client.query(`
+      ALTER TABLE salary_absence_exception_audit
+      ADD COLUMN IF NOT EXISTS approved_absent_days NUMERIC(8,2)
     `);
 
     await client.query(`
@@ -1263,20 +1275,29 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
     if (attendance.rowCount === 0) {
       throw errorWithStatus('Staff not found', 404);
     }
-    if (Number(attendance.rows[0].absent || 0) <= 0) {
+    const actualAbsentDays = Number(attendance.rows[0].absent || 0);
+    if (actualAbsentDays <= 0) {
       throw errorWithStatus('An absence exception requires at least one absent day');
     }
+    const approvedAbsentDays = item.approved_absent_days == null
+      ? actualAbsentDays
+      : Number(item.approved_absent_days);
+    if (approvedAbsentDays > actualAbsentDays) {
+      throw errorWithStatus('Approved absent days cannot exceed actual absent days');
+    }
+    const waiveDeduction = approvedAbsentDays >= actualAbsentDays;
 
     const result = await client.query(
       `
         INSERT INTO salary_absence_exceptions (
-          month, staff_no, waive_deduction, special_remark, status,
+          month, staff_no, waive_deduction, approved_absent_days, special_remark, status,
           created_by, updated_by, created_at, updated_at, revoked_at, revoked_by
         )
-        VALUES ($1, $2, true, $3, 'active', $4, $4, NOW(), NOW(), NULL, NULL)
+        VALUES ($1, $2, $3, $4, $5, 'active', $6, $6, NOW(), NOW(), NULL, NULL)
         ON CONFLICT (month, staff_no)
         DO UPDATE SET
-          waive_deduction = true,
+          waive_deduction = EXCLUDED.waive_deduction,
+          approved_absent_days = EXCLUDED.approved_absent_days,
           special_remark = EXCLUDED.special_remark,
           status = 'active',
           updated_by = EXCLUDED.updated_by,
@@ -1285,18 +1306,18 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
           revoked_by = NULL
         RETURNING *
       `,
-      [item.month, item.staff_no, item.special_remark, actorId]
+      [item.month, item.staff_no, waiveDeduction, approvedAbsentDays, item.special_remark, actorId]
     );
 
     await client.query(
       `
         INSERT INTO salary_absence_exception_audit (
           exception_id, month, staff_no, action, waive_deduction,
-          special_remark, action_by, action_at
+          approved_absent_days, special_remark, action_by, action_at
         )
-        VALUES ($1, $2, $3, 'saved', true, $4, $5, NOW())
+        VALUES ($1, $2, $3, 'saved', $4, $5, $6, $7, NOW())
       `,
-      [result.rows[0].id, item.month, item.staff_no, item.special_remark, actorId]
+      [result.rows[0].id, item.month, item.staff_no, waiveDeduction, approvedAbsentDays, item.special_remark, actorId]
     );
 
     await client.query('COMMIT');
@@ -1347,11 +1368,11 @@ const revokeSalaryAbsenceException = async (req, input, actorId = null) => {
       `
         INSERT INTO salary_absence_exception_audit (
           exception_id, month, staff_no, action, waive_deduction,
-          special_remark, action_by, action_at
+          approved_absent_days, special_remark, action_by, action_at
         )
-        VALUES ($1, $2, $3, 'revoked', false, $4, $5, NOW())
+        VALUES ($1, $2, $3, 'revoked', false, $4, $5, $6, NOW())
       `,
-      [result.rows[0].id, month, staffNo, result.rows[0].special_remark, actorId]
+      [result.rows[0].id, month, staffNo, result.rows[0].approved_absent_days, result.rows[0].special_remark, actorId]
     );
 
     await client.query('COMMIT');
