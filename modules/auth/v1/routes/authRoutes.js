@@ -68,6 +68,7 @@ const {
   getSalaryAbsenceExceptionsCtrl,
   upsertSalaryAbsenceExceptionCtrl,
   revokeSalaryAbsenceExceptionCtrl,
+  getSalaryFinanceExport,
   getSalaryVoucherSummary,
   setSettlement} = require('../controllers/salaryController');
 
@@ -184,6 +185,7 @@ router.post('/importSalaryFinanceInputs', auth, importSalaryFinanceInputs);
 router.post('/getSalaryAbsenceExceptions', auth, getSalaryAbsenceExceptionsCtrl);
 router.post('/upsertSalaryAbsenceException', auth, upsertSalaryAbsenceExceptionCtrl);
 router.post('/revokeSalaryAbsenceException', auth, revokeSalaryAbsenceExceptionCtrl);
+router.post('/getSalaryFinanceExport', auth, getSalaryFinanceExport);
 router.post('/getSalaryVoucherSummary', auth, getSalaryVoucherSummary);
 router.post('/updateStaffBay', updateStaffBay);
 router.post('/setSettlement', auth, setSettlement);

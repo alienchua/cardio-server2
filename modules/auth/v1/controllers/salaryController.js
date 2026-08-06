@@ -15,6 +15,7 @@ const {
   upsertSalaryAbsenceException,
   revokeSalaryAbsenceException,
   getFinanceInputByStaff,
+  getFinanceInputsForMonth,
   getSalarySnapshotByStaff,
   resolveStaffNo,
   upsertSalaryFinanceInputs,
@@ -513,6 +514,114 @@ const revokeSalaryAbsenceExceptionCtrl = async (req, res, next) => {
   }
 };
 
+const getSalaryFinanceExport = async (req, res, next) => {
+  const { month } = req.body;
+
+  try {
+    if (!hasPayrollAccess(req, res)) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid month in YYYY-MM format is required'
+      });
+    }
+
+    const [salaryRows, financeByStaff, adjustmentsByStaff, exceptionRows, basePayRuleData] = await Promise.all([
+      getSalaryResult(req, month),
+      getFinanceInputsForMonth(req, month),
+      getSalaryAdjustmentsForMonth(req, month),
+      getSalaryAbsenceExceptions(req, month),
+      getSalaryBasePayRules(req, month)
+    ]);
+    const exceptionByStaff = Object.fromEntries(
+      exceptionRows.map((row) => [String(row.staff_no), row])
+    );
+
+    const rows = salaryRows.map((salaryRow) => {
+      const staffNo = String(salaryRow.no);
+      const isSnapshot = Boolean(salaryRow.is_settlement_snapshot);
+      const finance = isSnapshot
+        ? salaryRow.finance || {}
+        : financeByStaff[staffNo] || {};
+      const absenceException = isSnapshot
+        ? salaryRow.absence_exception || null
+        : exceptionByStaff[staffNo] || null;
+
+      if (isSnapshot) {
+        const production = Number(
+          salaryRow.total_pay_out ?? salaryRow.production ?? (Number(salaryRow.total_com || 0) / 100)
+        );
+        const snapshotTotals = buildSalaryTotals({
+          salaryRow,
+          finance,
+          production,
+          basePayRules: basePayRuleData.rules,
+          absenceException
+        });
+        return {
+          month,
+          staff: {
+            no: salaryRow.no,
+            staff_id: salaryRow.staff_id,
+            name: salaryRow.name,
+            nick_name: salaryRow.nick_name,
+            ic: salaryRow.ic,
+            bank_name: salaryRow.bank_name,
+            acc_number: salaryRow.acc_number
+          },
+          attendance: Number(salaryRow.attendance || 0),
+          absent: Number(salaryRow.absent || 0),
+          system_deduction: Number(salaryRow.system_deduction ?? salaryRow.total_deduct ?? 0),
+          finance,
+          totals: {
+            ...snapshotTotals.totals,
+            contractor_amount: Number(salaryRow.base_pay || 0),
+            total_pay_out: production,
+            attendance_absenteeism: Number(salaryRow.attendance_absenteeism || 0)
+          }
+        };
+      }
+
+      const production = asMoney(Number(salaryRow.total_com || 0) / 100);
+      const adjustment = adjustmentsByStaff[Number(salaryRow.no)] || {};
+      const salaryTotals = buildSalaryTotals({
+        salaryRow,
+        finance,
+        adjustment,
+        production,
+        basePayRules: basePayRuleData.rules,
+        absenceException
+      });
+
+      return {
+        month,
+        staff: {
+          no: salaryRow.no,
+          staff_id: salaryRow.staff_id,
+          name: salaryRow.name,
+          nick_name: salaryRow.nick_name,
+          ic: salaryRow.ic,
+          bank_name: salaryRow.bank_name,
+          acc_number: salaryRow.acc_number
+        },
+        attendance: salaryTotals.attendance,
+        absent: salaryTotals.absent,
+        system_deduction: salaryTotals.systemDeduction,
+        finance,
+        totals: salaryTotals.totals
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Get salary finance export successfully',
+      data: { rows }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getSalaryVoucherSummary = async (req, res, next) => {
   const { month, staff_id, date_from, date_to } = req.body;
   const rangeOptions = {
@@ -829,6 +938,7 @@ module.exports = {
   getSalaryAbsenceExceptionsCtrl,
   upsertSalaryAbsenceExceptionCtrl,
   revokeSalaryAbsenceExceptionCtrl,
+  getSalaryFinanceExport,
   getSalaryVoucherSummary,
   setSettlement
 };
