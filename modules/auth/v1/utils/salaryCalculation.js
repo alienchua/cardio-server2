@@ -6,24 +6,12 @@ const asMoney = (value) => {
 const isActiveAbsenceException = (exception) => (
   Boolean(exception)
   && String(exception.status || '').toLowerCase() === 'active'
-  && (
-    exception.waive_deduction === true
-    || (
-      exception.approved_absent_days !== null
-      && exception.approved_absent_days !== undefined
-      && Number.isFinite(Number(exception.approved_absent_days))
-    )
-  )
+  && exception.waive_deduction === true
 );
 
 const getDeductibleAbsentDays = (absent, exception) => {
   const absentDays = Math.max(0, Number(absent || 0));
-  if (!isActiveAbsenceException(exception)) return absentDays;
-  if (exception.approved_absent_days === null || exception.approved_absent_days === undefined) {
-    return exception.waive_deduction === true ? 0 : absentDays;
-  }
-  const approvedDays = Math.min(absentDays, Math.max(0, Number(exception.approved_absent_days || 0)));
-  return Number((absentDays - approvedDays).toFixed(2));
+  return isActiveAbsenceException(exception) ? 0 : absentDays;
 };
 
 const getAttendanceAbsenteeism = (production, absent, exception = null) => {

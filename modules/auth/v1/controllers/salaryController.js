@@ -97,11 +97,7 @@ const getSalaryResultByMonth = async (req, res, next) => {
       return {
         ...row,
         absence_exception: absenceException
-          ? {
-              status: 'active',
-              waive_deduction: Boolean(absenceException.waive_deduction),
-              approved_absent_days: absenceException.approved_absent_days
-            }
+          ? { status: 'active', waive_deduction: true }
           : null,
         deductible_absent: row.is_settlement_snapshot && row.deductible_absent != null
           ? Number(row.deductible_absent || 0)

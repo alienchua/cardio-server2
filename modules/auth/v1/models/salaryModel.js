@@ -1179,7 +1179,7 @@ const getSalaryMonthStatusData = async (req, month) => {
         ), 0) AS finance_count,
         COALESCE((
           SELECT COUNT(*)::int FROM salary_absence_exceptions
-          WHERE month = $1 AND status = 'active'
+          WHERE month = $1 AND status = 'active' AND waive_deduction = true
         ), 0) AS absence_exception_count
     `,
     [month]
@@ -1229,6 +1229,7 @@ const getSalaryAbsenceExceptions = async (req, month, staffNo = null) => {
         AND LEFT(sa.month_label::text, 7) = sae.month
       WHERE sae.month = $1
         AND sae.status = 'active'
+        AND sae.waive_deduction = true
         ${staffFilter}
       ORDER BY s.staff_id, sae.staff_no
     `,
@@ -1279,25 +1280,17 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
     if (actualAbsentDays <= 0) {
       throw errorWithStatus('An absence exception requires at least one absent day');
     }
-    const approvedAbsentDays = item.approved_absent_days == null
-      ? actualAbsentDays
-      : Number(item.approved_absent_days);
-    if (approvedAbsentDays > actualAbsentDays) {
-      throw errorWithStatus('Approved absent days cannot exceed actual absent days');
-    }
-    const waiveDeduction = approvedAbsentDays >= actualAbsentDays;
-
     const result = await client.query(
       `
         INSERT INTO salary_absence_exceptions (
           month, staff_no, waive_deduction, approved_absent_days, special_remark, status,
           created_by, updated_by, created_at, updated_at, revoked_at, revoked_by
         )
-        VALUES ($1, $2, $3, $4, $5, 'active', $6, $6, NOW(), NOW(), NULL, NULL)
+        VALUES ($1, $2, true, NULL, $3, 'active', $4, $4, NOW(), NOW(), NULL, NULL)
         ON CONFLICT (month, staff_no)
         DO UPDATE SET
-          waive_deduction = EXCLUDED.waive_deduction,
-          approved_absent_days = EXCLUDED.approved_absent_days,
+          waive_deduction = true,
+          approved_absent_days = NULL,
           special_remark = EXCLUDED.special_remark,
           status = 'active',
           updated_by = EXCLUDED.updated_by,
@@ -1306,7 +1299,7 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
           revoked_by = NULL
         RETURNING *
       `,
-      [item.month, item.staff_no, waiveDeduction, approvedAbsentDays, item.special_remark, actorId]
+      [item.month, item.staff_no, item.special_remark, actorId]
     );
 
     await client.query(
@@ -1315,9 +1308,9 @@ const upsertSalaryAbsenceException = async (req, input, actorId = null) => {
           exception_id, month, staff_no, action, waive_deduction,
           approved_absent_days, special_remark, action_by, action_at
         )
-        VALUES ($1, $2, $3, 'saved', $4, $5, $6, $7, NOW())
+        VALUES ($1, $2, $3, 'saved', true, NULL, $4, $5, NOW())
       `,
-      [result.rows[0].id, item.month, item.staff_no, waiveDeduction, approvedAbsentDays, item.special_remark, actorId]
+      [result.rows[0].id, item.month, item.staff_no, item.special_remark, actorId]
     );
 
     await client.query('COMMIT');
@@ -1370,9 +1363,9 @@ const revokeSalaryAbsenceException = async (req, input, actorId = null) => {
           exception_id, month, staff_no, action, waive_deduction,
           approved_absent_days, special_remark, action_by, action_at
         )
-        VALUES ($1, $2, $3, 'revoked', false, $4, $5, $6, NOW())
+        VALUES ($1, $2, $3, 'revoked', false, NULL, $4, $5, NOW())
       `,
-      [result.rows[0].id, month, staffNo, result.rows[0].approved_absent_days, result.rows[0].special_remark, actorId]
+      [result.rows[0].id, month, staffNo, result.rows[0].special_remark, actorId]
     );
 
     await client.query('COMMIT');

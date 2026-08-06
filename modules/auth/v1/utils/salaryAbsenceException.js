@@ -8,10 +8,6 @@ const normalizeAbsenceExceptionInput = (input = {}) => {
   const month = String(input.month || '').trim();
   const staffNo = Number(input.staff_no);
   const waiveDeduction = input.waive_deduction === true || input.waive_deduction === 1;
-  const hasApprovedAbsentDays = input.approved_absent_days !== undefined
-    && input.approved_absent_days !== null
-    && input.approved_absent_days !== '';
-  const approvedAbsentDays = Number(input.approved_absent_days);
   const specialRemark = String(input.special_remark || '').trim();
 
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
@@ -20,10 +16,7 @@ const normalizeAbsenceExceptionInput = (input = {}) => {
   if (!Number.isInteger(staffNo) || staffNo <= 0) {
     throw errorWithStatus('A valid staff number is required');
   }
-  if (hasApprovedAbsentDays && (!Number.isFinite(approvedAbsentDays) || approvedAbsentDays <= 0)) {
-    throw errorWithStatus('Approved absent days must be greater than 0');
-  }
-  if (!hasApprovedAbsentDays && !waiveDeduction) {
+  if (!waiveDeduction) {
     throw errorWithStatus('waive_deduction must be true');
   }
   if (!specialRemark) {
@@ -32,13 +25,6 @@ const normalizeAbsenceExceptionInput = (input = {}) => {
   if (specialRemark.length > 1000) {
     throw errorWithStatus('Special Remark must be 1000 characters or fewer');
   }
-
-  if (hasApprovedAbsentDays) return {
-    month,
-    staff_no: staffNo,
-    approved_absent_days: approvedAbsentDays,
-    special_remark: specialRemark
-  };
 
   return {
     month,

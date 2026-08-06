@@ -32,6 +32,20 @@ test('does not accept partial approved-day decisions', () => {
   }), /waive_deduction must be true/);
 });
 
+test('keeps every normal penalty band when no waiver exists', () => {
+  assert.equal(getAttendanceAbsenteeism(1000, 0, null), 0);
+  assert.equal(getAttendanceAbsenteeism(1000, 5, null), 250);
+});
+
+test('rejects an invalid staff number', () => {
+  assert.throws(() => normalizeAbsenceExceptionInput({
+    month: '2026-08',
+    staff_no: 0,
+    waive_deduction: true,
+    special_remark: 'Invalid staff'
+  }), /valid staff number/);
+});
+
 test('exception persistence stores a binary penalty waiver', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '..', 'modules', 'auth', 'v1', 'models', 'salaryModel.js'),
