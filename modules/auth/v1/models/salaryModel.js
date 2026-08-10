@@ -369,7 +369,7 @@ const getSalaryDetailByBay = async (req , month , bay_id, date = null ) => {
       b.name = $2
       AND m.cancel_time IS NULL
       AND (
-        ($3::date IS NOT NULL AND c.checkin_time::date = $3::date)
+        ($3::date IS NOT NULL AND (c.checkin_time AT TIME ZONE 'Asia/Kuala_Lumpur')::date = $3::date)
         OR (
           $3::date IS NULL
           AND c.checkin_time >= to_date($1, 'YYYY-MM')
