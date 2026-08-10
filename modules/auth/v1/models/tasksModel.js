@@ -2312,7 +2312,17 @@ GROUP BY
 const getItemByMasterNo = async (req, no) => {
 
   const query = `
-  SELECT * FROM task_item WHERE masterlist_id = $1 AND type != 'New' AND type != 'Excluded'
+  SELECT
+    ti.*,
+    a.full_name,
+    a.accessory_type,
+    a.accessory_code,
+    COALESCE(ti.type, a.type) AS task_type
+  FROM task_item ti
+  LEFT JOIN accessories a ON a.no = ti.accessories_id
+  WHERE ti.masterlist_id = $1
+    AND ti.type != 'New'
+    AND ti.type != 'Excluded'
   `;
   const values = [
     no
