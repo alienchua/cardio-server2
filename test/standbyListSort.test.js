@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { getStandbyList } = require('../modules/auth/v1/models/tasksModel');
+const { getStandbyList, updateCheckInNew } = require('../modules/auth/v1/models/tasksModel');
 
 test('standby list query sorts standard bays A-E naturally before other names', async () => {
   let capturedQuery = '';
@@ -24,4 +24,26 @@ test('standby list query sorts standard bays A-E naturally before other names', 
   assert.match(normalizedQuery, /SUBSTRING\(UPPER\(TRIM\(b\.name\)\) FROM 2\)::INTEGER ELSE NULL END ASC/);
   assert.match(normalizedQuery, /UPPER\(TRIM\(COALESCE\(b\.name, ''\)\)\) ASC/);
   assert.match(normalizedQuery, /c\.created_at ASC, c\.no ASC$/);
+});
+
+test('converting standby to check-in records the check-in time', async () => {
+  let capturedQuery = '';
+  let capturedValues = [];
+  const req = {
+    app: {
+      get: () => ({
+        query: async (query, values) => {
+          capturedQuery = query;
+          capturedValues = values;
+          return { rows: [{ no: 17 }] };
+        }
+      })
+    }
+  };
+
+  await updateCheckInNew(req, 17, 4);
+
+  const normalizedQuery = capturedQuery.replace(/\s+/g, ' ').trim();
+  assert.match(normalizedQuery, /SET status = 'Check-In', bay_id = \$2, checkin_time = CURRENT_TIMESTAMP/);
+  assert.deepEqual(capturedValues, [17, 4]);
 });
