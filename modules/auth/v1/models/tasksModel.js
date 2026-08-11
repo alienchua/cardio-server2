@@ -780,7 +780,12 @@ const updateCheckIn = async (req,  masterlist_id , type ) => {
 };
 
 const updateCheckInNew = async (req, no , bay_id ) => {
-  const query = `UPDATE checkin SET status = 'Check-In' , bay_id = $2 WHERE no = $1 RETURNING *`;
+  const query = `UPDATE checkin
+    SET status = 'Check-In',
+        bay_id = $2,
+        checkin_time = CURRENT_TIMESTAMP
+    WHERE no = $1
+    RETURNING *`;
 
   const values = [
    no , bay_id
