@@ -2719,7 +2719,21 @@ const getStandbyList = async (req) => {
   const query = `SELECT b.name,  c.* , m.chassis , m.fitment_id , m.model_description , m.colour FROM checkin c 
   LEFT JOIN masterlist m ON m.no = c.masterlist_id
   LEFT JOIN bay b ON b.no = c.bay_id
-  WHERE c.status = 'Standby'`;
+  WHERE c.status = 'Standby'
+  ORDER BY
+    CASE
+      WHEN UPPER(TRIM(b.name)) ~ '^[A-E][0-9]+$' THEN 0
+      ELSE 1
+    END,
+    LEFT(UPPER(TRIM(b.name)), 1) ASC,
+    CASE
+      WHEN UPPER(TRIM(b.name)) ~ '^[A-E][0-9]+$'
+        THEN SUBSTRING(UPPER(TRIM(b.name)) FROM 2)::INTEGER
+      ELSE NULL
+    END ASC,
+    UPPER(TRIM(COALESCE(b.name, ''))) ASC,
+    c.created_at ASC,
+    c.no ASC`;
 
   const values = [
 
