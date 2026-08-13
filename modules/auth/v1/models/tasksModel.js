@@ -3149,9 +3149,10 @@ const getStaffTaskList = async (req , month , staff_id, options = {}) => {
   const dateFrom = options.dateFrom || null;
   const dateTo = options.dateTo || null;
   const hasDateRange = Boolean(dateFrom && dateTo);
+  const staffIdParam = hasDateRange ? '$1' : '$2';
   const dateFilterSql = hasDateRange
-    ? `c.checkin_time >= $3::date
-  AND c.checkin_time < ($4::date + INTERVAL '1 day')`
+    ? `c.checkin_time >= $2::date
+  AND c.checkin_time < ($3::date + INTERVAL '1 day')`
     : `c.checkin_time >= $1
   AND c.checkin_time < ($1::date + INTERVAL '1 month')`;
 
@@ -3217,7 +3218,7 @@ LEFT JOIN staff s2
 
 LEFT JOIN checkin_staff selected_staff
     ON selected_staff.checkin_id = c.no
-   AND selected_staff.staff_id = $2
+   AND selected_staff.staff_id = ${staffIdParam}
 
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS non_trainee_staff_count
@@ -3233,7 +3234,7 @@ AND EXISTS (
     SELECT 1
     FROM checkin_staff cs
     WHERE cs.checkin_id = c.no
-      AND cs.staff_id = $2
+      AND cs.staff_id = ${staffIdParam}
 )
 
 GROUP BY
@@ -3256,12 +3257,9 @@ GROUP BY
 ORDER BY c.checkin_time;
 `;
 
-  const values = [
-    month , staff_id
-  ];
-  if (hasDateRange) {
-    values.push(dateFrom, dateTo);
-  }
+  const values = hasDateRange
+    ? [staff_id, dateFrom, dateTo]
+    : [month, staff_id];
 
   const result = await req.app.get('pool').query(
     query,
