@@ -218,6 +218,7 @@ const combineFinanceAndAdjustments = (finance = {}, adjustment = {}) => ({
   defect_part_tools: asMoney(finance.defect_part_tools) + asMoney(adjustment.defect_part_tools),
   incentive_deduction: asMoney(finance.incentive_deduction) + asMoney(adjustment.incentive_deduction),
   cash_advance_second: asMoney(finance.cash_advance_second) + asMoney(adjustment.cash_advance_second),
+  deposit: asMoney(finance.deposit) + asMoney(adjustment.deposit),
   port_fitment: asMoney(finance.port_fitment) + asMoney(adjustment.port_fitment),
   incentive_addition: asMoney(finance.incentive_addition) + asMoney(adjustment.incentive_addition),
   deposit_release: asMoney(finance.deposit_release) + asMoney(adjustment.deposit_release)
@@ -254,12 +255,16 @@ const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, prod
   const epf11 = asMoney(basePay * 0.11);
   const epf13 = asMoney(basePay * 0.13);
   const effectiveFinance = combineFinanceAndAdjustments(finance, adjustment);
+  const socsoEmployee = asMoney(effectiveFinance.socso);
+  const socsoEmployer = asMoney(effectiveFinance.socso_employer);
+  const sipEmployee = asMoney(effectiveFinance.sip);
+  const sipEmployer = asMoney(effectiveFinance.sip_employer ?? effectiveFinance.sip);
   const normalAbsenteeismDeduction = getAttendanceAbsenteeism(production, absent, null);
   const deductibleAbsent = getDeductibleAbsentDays(absent, absenceException);
   const attendanceAbsenteeism = getAttendanceAbsenteeism(production, absent, absenceException);
   const finalPaymentDeduction =
-    asMoney(effectiveFinance.socso) +
-    asMoney(effectiveFinance.sip) +
+    socsoEmployee +
+    sipEmployee +
     asMoney(effectiveFinance.pcb) +
     asMoney(effectiveFinance.defect_part_tools) +
     attendanceAbsenteeism +
@@ -304,8 +309,12 @@ const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, prod
       cash_advance_first: asMoney(effectiveFinance.cash_advance_first),
       first_payment_total: firstPaymentTotal,
       epf_13: epf13,
-      socso: asMoney(effectiveFinance.socso),
-      sip: asMoney(effectiveFinance.sip),
+      socso: socsoEmployee,
+      socso_employee: socsoEmployee,
+      socso_employer: socsoEmployer,
+      sip: sipEmployee,
+      sip_employee: sipEmployee,
+      sip_employer: sipEmployer,
       balance_commission: balanceCommission,
       defect_part_tools: asMoney(effectiveFinance.defect_part_tools),
       pcb: asMoney(effectiveFinance.pcb),

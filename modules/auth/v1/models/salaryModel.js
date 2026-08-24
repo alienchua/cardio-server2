@@ -10,7 +10,7 @@ const DEFAULT_BASE_PAY_RULES = [
   { min_days: 16, amount: 1500 }
 ];
 
-const ADJUSTMENT_TYPES = ['Port', 'Deduct', 'Cash Adv', 'Released', 'Adj 1', 'Defect', 'Part&Tools'];
+const ADJUSTMENT_TYPES = ['Port', 'Deduct', 'Cash Adv', 'Deposit', 'Released', 'Adj 1', 'Defect', 'Part&Tools'];
 
 const insertInstallment = async (req , staff_id , amount , installment , remark ) => {
 
@@ -477,7 +477,9 @@ const ensureSalaryFinanceTables = async (req) => {
         cash_advance_first NUMERIC(12,2) DEFAULT 0,
         cash_advance_second NUMERIC(12,2) DEFAULT 0,
         socso NUMERIC(12,2) DEFAULT 0,
+        socso_employer NUMERIC(12,2),
         sip NUMERIC(12,2) DEFAULT 0,
+        sip_employer NUMERIC(12,2),
         pcb NUMERIC(12,2) DEFAULT 0,
         defect_part_tools NUMERIC(12,2) DEFAULT 0,
         attendance_absenteeism NUMERIC(12,2) DEFAULT 0,
@@ -489,6 +491,12 @@ const ensureSalaryFinanceTables = async (req) => {
         imported_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
         UNIQUE (month, staff_no)
       )
+    `);
+
+    await client.query(`
+      ALTER TABLE salary_finance_inputs
+      ADD COLUMN IF NOT EXISTS socso_employer NUMERIC(12,2),
+      ADD COLUMN IF NOT EXISTS sip_employer NUMERIC(12,2)
     `);
 
     await client.query(`
@@ -1064,6 +1072,7 @@ const getSalaryAdjustmentsForMonth = async (req, month, staffNo = null) => {
         port_fitment: 0,
         incentive_deduction: 0,
         cash_advance_second: 0,
+        deposit: 0,
         deposit_release: 0,
         incentive_addition: 0,
         defect_part_tools: 0,
@@ -1076,6 +1085,7 @@ const getSalaryAdjustmentsForMonth = async (req, month, staffNo = null) => {
     if (row.adjustment_type === 'Port') grouped[staffId].port_fitment += amount;
     if (row.adjustment_type === 'Deduct') grouped[staffId].incentive_deduction += absAmount;
     if (row.adjustment_type === 'Cash Adv') grouped[staffId].cash_advance_second += absAmount;
+    if (row.adjustment_type === 'Deposit') grouped[staffId].deposit += absAmount;
     if (row.adjustment_type === 'Released') grouped[staffId].deposit_release += amount;
     if (row.adjustment_type === 'Adj 1' && amount >= 0) grouped[staffId].incentive_addition += amount;
     if (row.adjustment_type === 'Adj 1' && amount < 0) grouped[staffId].incentive_deduction += absAmount;
@@ -1449,6 +1459,14 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
     for (let i = 0; i < rows.length; i += 1) {
       const input = rows[i] || {};
       const staffKey = input.staff_no || input.no || input.staff_id || input['Staff ID'] || input['Staff Id'];
+      const sipEmployee = money(input.sip);
+      const sipEmployer = money(input.sip_employer);
+
+      if (sipEmployee !== sipEmployer) {
+        errors.push({ row: i + 2, staff_id: staffKey || '', message: 'SIP/EIS employee and employer amounts must match.' });
+        continue;
+      }
+
       const staff = await resolveStaffNo(client, staffKey);
 
       if (!staff) {
@@ -1465,7 +1483,9 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
         money(input.cash_advance_first),
         money(input.cash_advance_second),
         money(input.socso),
-        money(input.sip),
+        money(input.socso_employer),
+        sipEmployee,
+        sipEmployer,
         money(input.pcb),
         money(input.defect_part_tools),
         0,
@@ -1480,10 +1500,10 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
         `
           INSERT INTO salary_finance_inputs (
             month, staff_no, staff_id, epf_11, epf_13, cash_advance_first, cash_advance_second,
-            socso, sip, pcb, defect_part_tools, attendance_absenteeism, incentive_deduction,
+            socso, socso_employer, sip, sip_employer, pcb, defect_part_tools, attendance_absenteeism, incentive_deduction,
             incentive_addition, deposit, deposit_release, finance_remarks, imported_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
           ON CONFLICT (month, staff_no)
           DO UPDATE SET
             staff_id = EXCLUDED.staff_id,
@@ -1492,7 +1512,9 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
             cash_advance_first = EXCLUDED.cash_advance_first,
             cash_advance_second = EXCLUDED.cash_advance_second,
             socso = EXCLUDED.socso,
+            socso_employer = EXCLUDED.socso_employer,
             sip = EXCLUDED.sip,
+            sip_employer = EXCLUDED.sip_employer,
             pcb = EXCLUDED.pcb,
             defect_part_tools = EXCLUDED.defect_part_tools,
             attendance_absenteeism = EXCLUDED.attendance_absenteeism,

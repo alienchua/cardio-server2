@@ -782,8 +782,7 @@ const updateCheckIn = async (req,  masterlist_id , type ) => {
 const updateCheckInNew = async (req, no , bay_id ) => {
   const query = `UPDATE checkin
     SET status = 'Check-In',
-        bay_id = $2,
-        checkin_time = CURRENT_TIMESTAMP
+        bay_id = $2
     WHERE no = $1
     RETURNING *`;
 
@@ -2680,10 +2679,10 @@ const updatePreparing = async (req, no) => {
 
 const updatePickupTime = async (req, no) => {
 
-  const query = `UPDATE checkin SET checkin_time = $1 WHERE no = $2 RETURNING *`;
+  const query = `UPDATE checkin SET checkin_time = CURRENT_TIMESTAMP WHERE no = $1 RETURNING *`;
 
   const values = [
-    new Date() ,  no
+    no
   ];
 
   const result = await req.app.get('pool').query(
