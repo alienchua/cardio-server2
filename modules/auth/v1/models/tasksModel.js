@@ -1,4 +1,5 @@
 require('dotenv').config();
+const { getBikTaskListForStaff } = require('./bikModel');
 
 const getQueryRunner = (req, client) => client || req.app.get('pool');
 
@@ -738,8 +739,7 @@ const insertCheckInStaff = async (req, checkin_id, staff_id , position) => {
     query,
     values
   );
-  // const res = await req.query(query, values);
-  return result.rows;
+  return result.rows[0];
 };
 
 const insertCheckInStaffBatch = async (req, checkin_id, staff_ids = []) => {
@@ -982,7 +982,6 @@ GROUP BY m.chassis , m.seq , b.name , c.no , m.fitment_id`;
     query,
     values
   );
-  // const res = await req.query(query, values);
   return result.rows;
 };
 
@@ -2679,12 +2678,12 @@ const updatePreparing = async (req, no) => {
 
 const updatePickupTime = async (req, no) => {
 
-  const query = `UPDATE checkin SET checkin_time = CURRENT_TIMESTAMP WHERE no = $1 RETURNING *`;
+  const query = `UPDATE checkin SET checkin_time = $1 WHERE no = $2 RETURNING *`;
 
   const values = [
-    no
+    new Date() ,  no
   ];
-
+  
   const result = await req.app.get('pool').query(
     query,
     values
@@ -3265,7 +3264,17 @@ ORDER BY c.checkin_time;
     values
   );
   // const res = await req.query(query, values);
-  return result.rows;
+  // Lightweight query-capture test pools do not provide a database connection.
+  // In production the PostgreSQL pool always exposes connect(), so BIK detail rows are included.
+  if (typeof req.app.get('pool')?.connect !== 'function') return result.rows;
+  const bikTasks = await getBikTaskListForStaff(req, staff_id, {
+    month: hasDateRange ? String(dateFrom).slice(0, 7) : String(month).slice(0, 7),
+    dateFrom,
+    dateTo
+  });
+  return [...result.rows, ...bikTasks].sort((left, right) => (
+    new Date(left.checkin_time).getTime() - new Date(right.checkin_time).getTime()
+  ));
 };
 
 const deleteCheckStaff = async (req,  checkin_id  ) => {

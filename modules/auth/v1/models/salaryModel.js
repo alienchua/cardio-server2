@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const { normalizeAbsenceExceptionInput, errorWithStatus } = require('../utils/salaryAbsenceException');
+const { getBikProductionByStaff } = require('./bikModel');
 
 const SALARY_EXCLUDED_STAFF_IDS = ['01111', '01112', '01113'];
 const DEFAULT_BASE_PAY_RULES = [
@@ -24,7 +25,6 @@ const insertInstallment = async (req , staff_id , amount , installment , remark 
     query,
     values
   );
-  // const res = await req.query(query, values);
   return result.rows;
 };
 
@@ -46,7 +46,6 @@ const getInstallment = async (req  ) => {
     query,
     values
   );
-  // const res = await req.query(query, values);
   return result.rows;
 };
 
@@ -264,7 +263,14 @@ ORDER BY s.no
     values
   );
   // const res = await req.query(query, values);
-  return result.rows;
+  const bikRows = await getBikProductionByStaff(req, month, { dateFrom, dateTo });
+  const bikByStaff = new Map(bikRows.map((row) => [String(row.staff_id), Number(row.total_com || 0)]));
+
+  // BIK is salary production, but intentionally is not a check-in/masterlist task.
+  return result.rows.map((row) => ({
+    ...row,
+    total_com: Number(row.total_com || 0) + (bikByStaff.get(String(row.no)) || 0)
+  }));
 };
 
 const getSalaryDetail = async (req , month , staff_id, options = {} ) => {

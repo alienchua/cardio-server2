@@ -125,6 +125,12 @@ const {
   manualCheckin,
   addCheckinStaffCtrl} = require('../controllers/tasksController');
 const {
+  getBikTasksCtrl,
+  createBikTaskCtrl,
+  updateBikTaskCtrl,
+  deleteBikTaskCtrl
+} = require('../controllers/bikController');
+const {
   getSpecialCarSettingsCtrl,
   getSpecialCarModelsCtrl,
   updateSpecialCarSettingsCtrl
@@ -227,6 +233,10 @@ router.post('/getMasterDetail', getMasterDetail);
 router.post('/taskOffset', taskOffset);
 router.get('/getTasksListCtrl', getTasksListCtrl);
 router.post('/getTasksListCtrl2', getTasksListCtrl2);
+router.post('/getBikTasks', auth, getBikTasksCtrl);
+router.post('/createBikTask', auth, createBikTaskCtrl);
+router.post('/updateBikTask', auth, updateBikTaskCtrl);
+router.post('/deleteBikTask', auth, deleteBikTaskCtrl);
 router.get('/getTasksStatusNullCount', getTasksStatusNullCountCtrl);
 router.post('/getAchievementListCtrl', getAchievementListCtrl);
 router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);
