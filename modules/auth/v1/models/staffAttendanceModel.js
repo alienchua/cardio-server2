@@ -70,15 +70,21 @@ const upsertAttendance = async (req, rows = []) => {
 
   const client = await pool.connect();
   const results = [];
+  const errors = [];
 
   try {
     await client.query('BEGIN');
 
-    for (const r of rows) {
+    for (const [index, r] of rows.entries()) {
       const staff = await resolveStaffNo(client, r.staff_id);
 
       if (!staff) {
-        throw new Error(`Staff ID ${r.staff_id} not found`);
+        errors.push({
+          row: r.source_row || index + 2,
+          staff_id: r.staff_id,
+          message: `Staff ID ${r.staff_id} not found`
+        });
+        continue;
       }
 
       const result = await client.query(
@@ -125,7 +131,7 @@ const upsertAttendance = async (req, rows = []) => {
     }
 
     await client.query('COMMIT');
-    return results;
+    return { imported: results, errors };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
