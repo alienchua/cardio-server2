@@ -93,6 +93,7 @@ const {
   getTasksListCtrl2,
   getAchievementListCtrl,
   getHourlyCompletedStatsCtrl,
+  getCompletedTaskSummaryCtrl,
   getMasterListCtrl2,
   deleteCheckinStaffCtrl,
   getStandyListToday,
@@ -133,7 +134,9 @@ const {
 const {
   getSpecialCarSettingsCtrl,
   getSpecialCarModelsCtrl,
-  updateSpecialCarSettingsCtrl
+  updateSpecialCarSettingsCtrl,
+  getAndonVisibilitySettingsCtrl,
+  updateAndonVisibilitySettingsCtrl
 } = require('../controllers/settingsController');
   
 const auth = require('../../../../middlewares/auth');
@@ -240,6 +243,7 @@ router.post('/deleteBikTask', auth, deleteBikTaskCtrl);
 router.get('/getTasksStatusNullCount', getTasksStatusNullCountCtrl);
 router.post('/getAchievementListCtrl', getAchievementListCtrl);
 router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);
+router.get('/getCompletedTaskSummaryCtrl', getCompletedTaskSummaryCtrl);
 router.post('/getMasterListCtrl2', getMasterListCtrl2);
 router.post('/cancelMasterlistRange', cancelMasterlistRangeCtrl);
 router.post('/deleteCheckinStaffCtrl', deleteCheckinStaffCtrl);
@@ -289,6 +293,8 @@ router.get('/getCurrentCheckInCtrl', getCurrentCheckInCtrl);
 router.get('/settings/special-car', getSpecialCarSettingsCtrl);
 router.get('/settings/special-car/models', getSpecialCarModelsCtrl);
 router.post('/settings/special-car', updateSpecialCarSettingsCtrl);
+router.get('/settings/andon-visibility', getAndonVisibilitySettingsCtrl);
+router.post('/settings/andon-visibility', auth, updateAndonVisibilitySettingsCtrl);
 
 // installment
 router.post('/createInstallment', createInstallment);

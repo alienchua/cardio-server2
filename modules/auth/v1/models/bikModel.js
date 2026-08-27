@@ -7,13 +7,42 @@ const ensureBikTables = async (req) => {
     await client.query(`
       CREATE TABLE IF NOT EXISTS bik_task (
         no BIGSERIAL PRIMARY KEY, seq VARCHAR(100) NOT NULL, chassis VARCHAR(255) NOT NULL,
-        installation_date DATE NOT NULL, bay_id BIGINT NOT NULL REFERENCES bay(no),
-        installer_staff_id BIGINT NOT NULL REFERENCES staff(no), price_cents BIGINT NOT NULL CHECK (price_cents > 0),
+        installation_date DATE NOT NULL, plan_date DATE NOT NULL, bay_id BIGINT NOT NULL REFERENCES bay(no),
+        installer_staff_id BIGINT REFERENCES staff(no), price_cents BIGINT NOT NULL CONSTRAINT bik_task_price_cents_nonnegative CHECK (price_cents >= 0),
         accessory TEXT NOT NULL, model_description TEXT NOT NULL, colour TEXT NOT NULL, remarks TEXT NOT NULL DEFAULT '',
         created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(), updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
         deleted_at TIMESTAMP WITHOUT TIME ZONE, created_by BIGINT, updated_by BIGINT, deleted_by BIGINT
       )
     `);
+    await client.query(`ALTER TABLE bik_task ALTER COLUMN installer_staff_id DROP NOT NULL`);
+    await client.query(`
+      DO $$
+      DECLARE price_constraint_name TEXT;
+      BEGIN
+        SELECT conname INTO price_constraint_name
+        FROM pg_constraint
+        WHERE conrelid = 'bik_task'::regclass
+          AND contype = 'c'
+          AND pg_get_constraintdef(oid) ~ 'price_cents.*> 0'
+        LIMIT 1;
+
+        IF price_constraint_name IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE bik_task DROP CONSTRAINT %I', price_constraint_name);
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'bik_task'::regclass
+            AND conname = 'bik_task_price_cents_nonnegative'
+        ) THEN
+          ALTER TABLE bik_task
+            ADD CONSTRAINT bik_task_price_cents_nonnegative CHECK (price_cents >= 0);
+        END IF;
+      END $$
+    `);
+    await client.query(`ALTER TABLE bik_task ADD COLUMN IF NOT EXISTS plan_date DATE`);
+    await client.query(`UPDATE bik_task SET plan_date = installation_date WHERE plan_date IS NULL`);
+    await client.query(`ALTER TABLE bik_task ALTER COLUMN plan_date SET NOT NULL`);
     await client.query(`ALTER TABLE bik_task ADD COLUMN IF NOT EXISTS remarks TEXT NOT NULL DEFAULT ''`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS bik_task_staff (
@@ -50,6 +79,7 @@ const installerAggregationSql = `
 // which can appear as the prior day in Malaysia. Keep the API contract date-only instead.
 const bikTaskSelectColumns = `
   b.no, b.seq, b.chassis, to_char(b.installation_date, 'YYYY-MM-DD') AS installation_date,
+  to_char(b.plan_date, 'YYYY-MM-DD') AS plan_date,
   b.bay_id, b.installer_staff_id, b.price_cents, b.accessory, b.model_description, b.colour, b.remarks,
   b.created_at, b.updated_at, b.deleted_at, b.created_by, b.updated_by, b.deleted_by
 `;
@@ -87,11 +117,12 @@ const createBikTask = async (req, data, userId = null) => {
   try {
     await client.query('BEGIN');
     const result = await client.query(`
-      INSERT INTO bik_task (seq, chassis, installation_date, bay_id, installer_staff_id, price_cents, accessory, model_description, colour, remarks, created_by, updated_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
-      RETURNING no, seq, chassis, to_char(installation_date, 'YYYY-MM-DD') AS installation_date, bay_id, installer_staff_id,
+      INSERT INTO bik_task (seq, chassis, installation_date, plan_date, bay_id, installer_staff_id, price_cents, accessory, model_description, colour, remarks, created_by, updated_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+      RETURNING no, seq, chassis, to_char(installation_date, 'YYYY-MM-DD') AS installation_date,
+        to_char(plan_date, 'YYYY-MM-DD') AS plan_date, bay_id, installer_staff_id,
         price_cents, accessory, model_description, colour, remarks, created_at, updated_at, deleted_at, created_by, updated_by, deleted_by`,
-    [data.seq, data.chassis, data.installation_date, data.bay_id, data.installer_staff_ids[0], data.price_cents, data.accessory, data.model_description, data.colour, data.remarks, userId]);
+    [data.seq, data.chassis, data.installation_date, data.plan_date, data.bay_id, data.installer_staff_ids[0] || null, data.price_cents, data.accessory, data.model_description, data.colour, data.remarks, userId]);
     await insertBikStaff(client, result.rows[0].no, data.installer_staff_ids);
     await client.query('COMMIT');
     return result.rows[0];
@@ -107,12 +138,13 @@ const updateBikTask = async (req, no, data, userId = null) => {
   try {
     await client.query('BEGIN');
     const result = await client.query(`
-      UPDATE bik_task SET seq = $2, chassis = $3, installation_date = $4, bay_id = $5, installer_staff_id = $6,
-        price_cents = $7, accessory = $8, model_description = $9, colour = $10, remarks = $11, updated_at = NOW(), updated_by = $12
+      UPDATE bik_task SET seq = $2, chassis = $3, installation_date = $4, plan_date = $5, bay_id = $6, installer_staff_id = $7,
+        price_cents = $8, accessory = $9, model_description = $10, colour = $11, remarks = $12, updated_at = NOW(), updated_by = $13
       WHERE no = $1 AND deleted_at IS NULL
-      RETURNING no, seq, chassis, to_char(installation_date, 'YYYY-MM-DD') AS installation_date, bay_id, installer_staff_id,
+      RETURNING no, seq, chassis, to_char(installation_date, 'YYYY-MM-DD') AS installation_date,
+        to_char(plan_date, 'YYYY-MM-DD') AS plan_date, bay_id, installer_staff_id,
         price_cents, accessory, model_description, colour, remarks, created_at, updated_at, deleted_at, created_by, updated_by, deleted_by`,
-    [no, data.seq, data.chassis, data.installation_date, data.bay_id, data.installer_staff_ids[0], data.price_cents, data.accessory, data.model_description, data.colour, data.remarks, userId]);
+    [no, data.seq, data.chassis, data.installation_date, data.plan_date, data.bay_id, data.installer_staff_ids[0] || null, data.price_cents, data.accessory, data.model_description, data.colour, data.remarks, userId]);
     if (result.rowCount === 0) { await client.query('ROLLBACK'); return null; }
     await client.query(`DELETE FROM bik_task_staff WHERE bik_task_id = $1`, [no]);
     await insertBikStaff(client, no, data.installer_staff_ids);
@@ -155,7 +187,8 @@ const getBikTaskListForStaff = async (req, staffId, { month, dateFrom = null, da
   await ensureBikTables(req);
   const hasRange = Boolean(dateFrom && dateTo);
   const result = await req.app.get('pool').query(`
-    SELECT ('bik-' || b.no)::text AS checkin_id, b.installation_date::timestamp AS checkin_time, '-'::text AS cafi_date,
+    SELECT ('bik-' || b.no)::text AS checkin_id, b.installation_date::timestamp AS checkin_time,
+      to_char(b.plan_date, 'YYYY-MM-DD') AS cafi_date,
       'BIK'::text AS fitment_id, b.chassis, b.colour, b.model_description, 'BIK'::text AS type, bay.name AS bay_name, b.seq,
       0::numeric AS total_duration, b.price_cents::numeric AS total_price,
       jsonb_build_array(jsonb_build_object('short_name', b.accessory)) AS task, 'INSTALLER'::text AS staff_position,

@@ -12,7 +12,7 @@ const bikControllerSource = fs.readFileSync(
   'utf8'
 );
 
-test('BIK installation dates are returned as timezone-safe YYYY-MM-DD text', () => {
+test('BIK installation and plan dates are returned as timezone-safe YYYY-MM-DD text', () => {
   assert.match(
     bikModelSource,
     /to_char\(b\.installation_date, 'YYYY-MM-DD'\) AS installation_date/
@@ -21,14 +21,25 @@ test('BIK installation dates are returned as timezone-safe YYYY-MM-DD text', () 
     bikModelSource,
     /RETURNING no, seq, chassis, to_char\(installation_date, 'YYYY-MM-DD'\) AS installation_date/
   );
+  assert.match(
+    bikModelSource,
+    /to_char\(b\.plan_date, 'YYYY-MM-DD'\) AS plan_date/
+  );
   assert.doesNotMatch(
     bikModelSource,
     /SELECT b\.no, b\.seq, b\.chassis, b\.installation_date, b\.bay_id/
   );
   assert.match(
     bikModelSource,
-    /b\.installation_date::timestamp AS checkin_time, '-'::text AS cafi_date/
+    /b\.installation_date::timestamp AS checkin_time,\s+to_char\(b\.plan_date, 'YYYY-MM-DD'\) AS cafi_date/
   );
+});
+
+test('BIK plan dates are required and existing BIK rows are backfilled', () => {
+  assert.match(bikModelSource, /ADD COLUMN IF NOT EXISTS plan_date DATE/);
+  assert.match(bikModelSource, /UPDATE bik_task SET plan_date = installation_date WHERE plan_date IS NULL/);
+  assert.match(bikControllerSource, /'plan_date'/);
+  assert.match(bikControllerSource, /plan date must use YYYY-MM-DD/);
 });
 
 test('BIK remarks are stored on BIK records but excluded from salary task rows', () => {
@@ -41,4 +52,12 @@ test('BIK remarks are stored on BIK records but excluded from salary task rows',
     bikModelSource.indexOf('module.exports')
   );
   assert.doesNotMatch(salaryRowQuery, /remarks/);
+});
+
+test('BIK permits an empty installer list and zero price only in Bay E', () => {
+  assert.match(bikModelSource, /price_cents BIGINT NOT NULL CONSTRAINT bik_task_price_cents_nonnegative CHECK \(price_cents >= 0\)/);
+  assert.match(bikModelSource, /bik_task_price_cents_nonnegative CHECK \(price_cents >= 0\)/);
+  assert.match(bikControllerSource, /const isBayE = .*startsWith\('E'\)/);
+  assert.match(bikControllerSource, /at least one installer is required outside Bay E/);
+  assert.match(bikControllerSource, /price can only be zero in Bay E/);
 });

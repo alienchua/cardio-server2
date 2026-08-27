@@ -31,6 +31,7 @@ const {
   getAchievementList,
   getAchievementAnalysis,
   getHourlyCompletedStats,
+  getCompletedTaskSummary,
   deleteCheckinStaff,
   getStandyList,
   getStockCheckList,
@@ -863,12 +864,72 @@ const getLastOpenCafiDateCtrl = async (req, res, next) => {
   }
 };
 
+const getDashboardDate = (req) => {
+  const value = typeof req.query?.date === 'string' ? req.query.date.trim() : '';
+  if (!value) return null;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const error = new Error('Date must use the YYYY-MM-DD format');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    const error = new Error('Date is not valid');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return value;
+};
+
 const getHourlyCompletedStatsCtrl = async (req, res, next) => {
   try {
-    const result = await getHourlyCompletedStats(req);
+    const selectedDate = getDashboardDate(req);
+    const result = await getHourlyCompletedStats(req, selectedDate);
     res.status(200).json({
       success: true,
       message: "Get hourly completed stats successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getCompletedTaskSummaryCtrl = async (req, res, next) => {
+  try {
+    const scope = typeof req.query?.scope === 'string' ? req.query.scope.trim() : '';
+    const value = typeof req.query?.value === 'string' ? req.query.value.trim() : '';
+    let startDate;
+    let endDate;
+
+    if (scope === 'month' && /^\d{4}-\d{2}$/.test(value)) {
+      const [year, month] = value.split('-').map(Number);
+      if (month < 1 || month > 12) {
+        const error = new Error('Month is not valid');
+        error.statusCode = 400;
+        throw error;
+      }
+      startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+      endDate = month === 12
+        ? `${year + 1}-01-01`
+        : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+    } else if (scope === 'year' && /^\d{4}$/.test(value)) {
+      const year = Number(value);
+      startDate = `${year}-01-01`;
+      endDate = `${year + 1}-01-01`;
+    } else {
+      const error = new Error('Use scope=month with YYYY-MM or scope=year with YYYY');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const result = await getCompletedTaskSummary(req, startDate, endDate);
+    res.status(200).json({
+      success: true,
+      message: 'Get completed task summary successfully',
       data: result
     });
   } catch (error) {
@@ -933,7 +994,8 @@ const getTasksStatusNullCountCtrl = async (req, res, next) => {
 
 const getDashboardStatsCtrl = async (req, res, next) => {
   try {
-    const stats = await getDashboardStats(req);
+    const selectedDate = getDashboardDate(req);
+    const stats = await getDashboardStats(req, selectedDate);
 
     res.status(200).json({
       success: true,
@@ -1866,6 +1928,7 @@ module.exports = {
   getAchievementListCtrl,
   getMasterListCtrl2,
   getHourlyCompletedStatsCtrl,
+  getCompletedTaskSummaryCtrl,
   deleteCheckinStaffCtrl,
   getStandyListToday,
   getStockCheckListToday,
