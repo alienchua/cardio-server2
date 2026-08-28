@@ -864,24 +864,51 @@ const getLastOpenCafiDateCtrl = async (req, res, next) => {
   }
 };
 
+const parseDashboardDate = (value, parameterName) => {
+  const normalizedValue = typeof value === 'string' ? value.trim() : '';
+  if (!normalizedValue) return null;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedValue)) {
+    const error = new Error(`${parameterName} must use the YYYY-MM-DD format`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const parsed = new Date(`${normalizedValue}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalizedValue) {
+    const error = new Error(`${parameterName} is not valid`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return normalizedValue;
+};
+
 const getDashboardDate = (req) => {
-  const value = typeof req.query?.date === 'string' ? req.query.date.trim() : '';
+  const value = req.query?.date;
   if (!value) return null;
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    const error = new Error('Date must use the YYYY-MM-DD format');
+  return parseDashboardDate(value, 'date');
+};
+
+const getDashboardDateRange = (req) => {
+  const dateFrom = parseDashboardDate(req.query?.date_from, 'date_from');
+  const dateTo = parseDashboardDate(req.query?.date_to, 'date_to');
+  const legacyDate = getDashboardDate(req);
+
+  if (!dateFrom && !dateTo) {
+    return { dateFrom: legacyDate, dateTo: legacyDate };
+  }
+
+  const normalizedFrom = dateFrom || dateTo;
+  const normalizedTo = dateTo || dateFrom;
+  if (normalizedFrom > normalizedTo) {
+    const error = new Error('date_from must be on or before date_to');
     error.statusCode = 400;
     throw error;
   }
 
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
-    const error = new Error('Date is not valid');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  return value;
+  return { dateFrom: normalizedFrom, dateTo: normalizedTo };
 };
 
 const getHourlyCompletedStatsCtrl = async (req, res, next) => {
@@ -902,6 +929,7 @@ const getCompletedTaskSummaryCtrl = async (req, res, next) => {
   try {
     const scope = typeof req.query?.scope === 'string' ? req.query.scope.trim() : '';
     const value = typeof req.query?.value === 'string' ? req.query.value.trim() : '';
+    const requestedEndDate = parseDashboardDate(req.query?.end_date, 'end_date');
     let startDate;
     let endDate;
 
@@ -924,6 +952,17 @@ const getCompletedTaskSummaryCtrl = async (req, res, next) => {
       const error = new Error('Use scope=month with YYYY-MM or scope=year with YYYY');
       error.statusCode = 400;
       throw error;
+    }
+
+    if (requestedEndDate) {
+      if (requestedEndDate < startDate || requestedEndDate >= endDate) {
+        const error = new Error('end_date must fall within the selected month or year');
+        error.statusCode = 400;
+        throw error;
+      }
+      const inclusiveEndDate = new Date(`${requestedEndDate}T00:00:00.000Z`);
+      inclusiveEndDate.setUTCDate(inclusiveEndDate.getUTCDate() + 1);
+      endDate = inclusiveEndDate.toISOString().slice(0, 10);
     }
 
     const result = await getCompletedTaskSummary(req, startDate, endDate);
@@ -994,8 +1033,8 @@ const getTasksStatusNullCountCtrl = async (req, res, next) => {
 
 const getDashboardStatsCtrl = async (req, res, next) => {
   try {
-    const selectedDate = getDashboardDate(req);
-    const stats = await getDashboardStats(req, selectedDate);
+    const { dateFrom, dateTo } = getDashboardDateRange(req);
+    const stats = await getDashboardStats(req, dateFrom, dateTo);
 
     res.status(200).json({
       success: true,

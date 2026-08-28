@@ -7,7 +7,7 @@ const {
   updatePickupTime
 } = require('../modules/auth/v1/models/tasksModel');
 
-test('standby list query sorts standard bays A-E naturally before other names', async () => {
+test('check-in standby list query sorts standard bays A-E naturally before other names', async () => {
   let capturedQuery = '';
   const req = {
     app: {
@@ -28,6 +28,29 @@ test('standby list query sorts standard bays A-E naturally before other names', 
   assert.match(normalizedQuery, /SUBSTRING\(UPPER\(TRIM\(b\.name\)\) FROM 2\)::INTEGER ELSE NULL END ASC/);
   assert.match(normalizedQuery, /UPPER\(TRIM\(COALESCE\(b\.name, ''\)\)\) ASC/);
   assert.match(normalizedQuery, /c\.created_at ASC, c\.no ASC$/);
+});
+
+test('standby screen query puts Ready parts before all other part statuses', async () => {
+  let capturedQuery = '';
+  const req = {
+    app: {
+      get: () => ({
+        query: async (query) => {
+          capturedQuery = query;
+          return { rows: [] };
+        }
+      })
+    }
+  };
+
+  const { getStandyList } = require('../modules/auth/v1/models/tasksModel');
+  await getStandyList(req, 'FITMENT');
+
+  const normalizedQuery = capturedQuery.replace(/\s+/g, ' ').trim();
+  assert.match(
+    normalizedQuery,
+    /ORDER BY CASE WHEN UPPER\(TRIM\(COALESCE\(c\.accessory_status, ''\)\)\) = 'READY' THEN 0 ELSE 1 END ASC, c\.no ASC;/
+  );
 });
 
 test('converting standby to check-in leaves the check-in time unset for staff pickup', async () => {

@@ -1131,7 +1131,7 @@ const getMasterBacklogCount = async (req) => {
 };
 
 // Count tasks that have not been checked in yet (no checkin_time)
-const getTasksBacklogCount = async (req, selectedDate = null) => {
+const getTasksBacklogCount = async (req, dateFrom = null, dateTo = null) => {
   const query = `
 SELECT COUNT(DISTINCT m.no)::int AS count
 FROM masterlist m 
@@ -1151,18 +1151,18 @@ LEFT JOIN bay b
 WHERE c.checkin_time IS NULL
   AND (
     ($1::date IS NULL AND m.cafi_date > DATE '2026-02-01')
-    OR ($1::date IS NOT NULL AND m.cafi_date = $1::date)
+    OR ($1::date IS NOT NULL AND m.cafi_date BETWEEN $1::date AND COALESCE($2::date, $1::date))
   )
   AND m.cancel_time is null
 
   `;
 
-  const result = await req.app.get('pool').query(query, [selectedDate]);
+  const result = await req.app.get('pool').query(query, [dateFrom, dateTo]);
   return result.rows[0]?.count || 0;
 };
 
 // Dashboard aggregated stats
-const getDashboardStats = async (req, selectedDate = null) => {
+const getDashboardStats = async (req, dateFrom = null, dateTo = null) => {
   const pool = req.app.get('pool');
 
   // Active bay counts
@@ -1177,7 +1177,7 @@ const getDashboardStats = async (req, selectedDate = null) => {
   const activeBayRes = await pool.query(activeBayQuery);
   const activeBay = activeBayRes.rows[0] || { total_bays: 0, staffed_bays: 0 };
 
-  // Pending tasks for today (CAFI date today, not finished)
+  // Pending tasks with CAFI dates inside the selected inclusive range.
   const pendingTodayQuery = `
     SELECT COUNT(*)::int AS count
     FROM (
@@ -1205,18 +1205,20 @@ const getDashboardStats = async (req, selectedDate = null) => {
       LEFT JOIN task_item t 
         ON t.masterlist_id = m.no 
         AND t.type = m2.type
-      WHERE m.cafi_date = COALESCE($1::date, CURRENT_DATE)
+      WHERE m.cafi_date BETWEEN COALESCE($1::date, CURRENT_DATE)
+        AND COALESCE($2::date, COALESCE($1::date, CURRENT_DATE))
     ) AS tasks
     WHERE checkout_time IS NULL OR status IS NULL OR status != 'Check-Out'
   `;
-  const pendingTodayRes = await pool.query(pendingTodayQuery, [selectedDate]);
+  const pendingTodayRes = await pool.query(pendingTodayQuery, [dateFrom, dateTo]);
 
-  // Check-ins started on the selected date. With no date selected, this remains today.
+  // Check-ins started inside the selected inclusive range. With no range, this remains today.
   const checkinRes = await pool.query(
     `SELECT COUNT(*)::int AS count
      FROM checkin
-     WHERE checkin_time::date = COALESCE($1::date, CURRENT_DATE)`,
-    [selectedDate]
+     WHERE checkin_time::date BETWEEN COALESCE($1::date, CURRENT_DATE)
+       AND COALESCE($2::date, COALESCE($1::date, CURRENT_DATE))`,
+    [dateFrom, dateTo]
   );
 
   // Completed masterlist (all tasks for that masterlist checked out)
@@ -1241,12 +1243,13 @@ const getDashboardStats = async (req, selectedDate = null) => {
     LEFT JOIN completed c ON c.masterlist_id = e.masterlist_id
     WHERE e.expected_count > 0
       AND COALESCE(c.completed_count, 0) = e.expected_count
-      AND c.completed_at::date = COALESCE($1::date, CURRENT_DATE)
+      AND c.completed_at::date BETWEEN COALESCE($1::date, CURRENT_DATE)
+        AND COALESCE($2::date, COALESCE($1::date, CURRENT_DATE))
   `;
-  const completedRes = await pool.query(completedQuery, [selectedDate]);
+  const completedRes = await pool.query(completedQuery, [dateFrom, dateTo]);
 
   // Backlog from existing helper
-  const backlogCount = await getTasksBacklogCount(req, selectedDate);
+  const backlogCount = await getTasksBacklogCount(req, dateFrom, dateTo);
 
   // Bay status from current check-ins (andon)
   const bayStatusData = await getCurrentCheckin(req);
@@ -2653,6 +2656,10 @@ WHERE
         AND s.model_code IS NOT NULL
     )) AND accessory_status != 'Completed'
 ORDER BY 
+    CASE
+        WHEN UPPER(TRIM(COALESCE(c.accessory_status, ''))) = 'READY' THEN 0
+        ELSE 1
+    END ASC,
     c.no ASC;
   `;
   const values = [type];
