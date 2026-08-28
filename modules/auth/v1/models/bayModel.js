@@ -262,6 +262,14 @@ const selectBayByName = async (req , name) => {
   return result.rows[0];
 };
 
+const selectBayById = async (req, bayId) => {
+  const result = await req.app.get('pool').query(
+    'SELECT * FROM bay WHERE no = $1',
+    [bayId]
+  );
+  return result.rows[0];
+};
+
 const getBayStaffDetailByBayId = async (req, bay_id) => {
   const query = `
     SELECT
@@ -429,6 +437,7 @@ const getBayPerformanceAnalytics = async (req, date, model) => {
     ) AS staff_summary ON TRUE
     WHERE c.checkin_time IS NOT NULL
       AND ($1::date IS NULL OR c.checkin_time::date = $1::date)
+      AND m.cancel_time IS NULL
       AND (
         $2::text IS NULL
         OR m.model_description ILIKE $2
@@ -529,6 +538,7 @@ module.exports = {
   quickFromBay,
   clearBayStaffByBayId,
   selectBayByName,
+  selectBayById,
   getBayStaffDetailByBayId,
   getBayCurrentByStaffId,
   removeStaffByStaffId,

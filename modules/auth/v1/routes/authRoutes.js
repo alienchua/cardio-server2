@@ -65,6 +65,10 @@ const {
   getSalaryBasePayRulesCtrl,
   updateSalaryBasePayRulesCtrl,
   importSalaryFinanceInputs,
+  getSalaryAbsenceExceptionsCtrl,
+  upsertSalaryAbsenceExceptionCtrl,
+  revokeSalaryAbsenceExceptionCtrl,
+  getSalaryFinanceExport,
   getSalaryVoucherSummary,
   setSettlement} = require('../controllers/salaryController');
 
@@ -89,6 +93,7 @@ const {
   getTasksListCtrl2,
   getAchievementListCtrl,
   getHourlyCompletedStatsCtrl,
+  getCompletedTaskSummaryCtrl,
   getMasterListCtrl2,
   deleteCheckinStaffCtrl,
   getStandyListToday,
@@ -121,9 +126,17 @@ const {
   manualCheckin,
   addCheckinStaffCtrl} = require('../controllers/tasksController');
 const {
+  getBikTasksCtrl,
+  createBikTaskCtrl,
+  updateBikTaskCtrl,
+  deleteBikTaskCtrl
+} = require('../controllers/bikController');
+const {
   getSpecialCarSettingsCtrl,
   getSpecialCarModelsCtrl,
-  updateSpecialCarSettingsCtrl
+  updateSpecialCarSettingsCtrl,
+  getAndonVisibilitySettingsCtrl,
+  updateAndonVisibilitySettingsCtrl
 } = require('../controllers/settingsController');
   
 const auth = require('../../../../middlewares/auth');
@@ -177,10 +190,14 @@ router.post('/getSalaryVoucherDetailByBay', getSalaryVoucherDetailByBay);
 router.post('/getSalaryMonthStatus', getSalaryMonthStatus);
 router.post('/getSalaryBasePayRules', getSalaryBasePayRulesCtrl);
 router.post('/updateSalaryBasePayRules', updateSalaryBasePayRulesCtrl);
-router.post('/importSalaryFinanceInputs', importSalaryFinanceInputs);
-router.post('/getSalaryVoucherSummary', getSalaryVoucherSummary);
+router.post('/importSalaryFinanceInputs', auth, importSalaryFinanceInputs);
+router.post('/getSalaryAbsenceExceptions', auth, getSalaryAbsenceExceptionsCtrl);
+router.post('/upsertSalaryAbsenceException', auth, upsertSalaryAbsenceExceptionCtrl);
+router.post('/revokeSalaryAbsenceException', auth, revokeSalaryAbsenceExceptionCtrl);
+router.post('/getSalaryFinanceExport', auth, getSalaryFinanceExport);
+router.post('/getSalaryVoucherSummary', auth, getSalaryVoucherSummary);
 router.post('/updateStaffBay', updateStaffBay);
-router.post('/setSettlement', setSettlement);
+router.post('/setSettlement', auth, setSettlement);
 router.post('/uploadStaffAttendance', uploadStaffAttendance);
 router.post('/createStaff', createStaff);
 router.post('/uploadStaffPhoto', uploadStaffPhoto);
@@ -219,9 +236,14 @@ router.post('/getMasterDetail', getMasterDetail);
 router.post('/taskOffset', taskOffset);
 router.get('/getTasksListCtrl', getTasksListCtrl);
 router.post('/getTasksListCtrl2', getTasksListCtrl2);
+router.post('/getBikTasks', auth, getBikTasksCtrl);
+router.post('/createBikTask', auth, createBikTaskCtrl);
+router.post('/updateBikTask', auth, updateBikTaskCtrl);
+router.post('/deleteBikTask', auth, deleteBikTaskCtrl);
 router.get('/getTasksStatusNullCount', getTasksStatusNullCountCtrl);
 router.post('/getAchievementListCtrl', getAchievementListCtrl);
 router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);
+router.get('/getCompletedTaskSummaryCtrl', getCompletedTaskSummaryCtrl);
 router.post('/getMasterListCtrl2', getMasterListCtrl2);
 router.post('/cancelMasterlistRange', cancelMasterlistRangeCtrl);
 router.post('/deleteCheckinStaffCtrl', deleteCheckinStaffCtrl);
@@ -271,6 +293,8 @@ router.get('/getCurrentCheckInCtrl', getCurrentCheckInCtrl);
 router.get('/settings/special-car', getSpecialCarSettingsCtrl);
 router.get('/settings/special-car/models', getSpecialCarModelsCtrl);
 router.post('/settings/special-car', updateSpecialCarSettingsCtrl);
+router.get('/settings/andon-visibility', getAndonVisibilitySettingsCtrl);
+router.post('/settings/andon-visibility', auth, updateAndonVisibilitySettingsCtrl);
 
 // installment
 router.post('/createInstallment', createInstallment);

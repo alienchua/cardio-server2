@@ -31,6 +31,7 @@ const {
   getAchievementList,
   getAchievementAnalysis,
   getHourlyCompletedStats,
+  getCompletedTaskSummary,
   deleteCheckinStaff,
   getStandyList,
   getStockCheckList,
@@ -96,12 +97,14 @@ const {
 const {
   selectBayStaff,
   selectBayByName,
+  selectBayById,
   getBayStaffDetailByBayId
 } = require('../models/bayModel');
 const {
   getStaffById
 } = require('../models/staffsModel');
 const { broadcastToTopic, broadcastToTopics } = require('../../../realtime/v1/config/websocketConfig');
+const { canCheckInToBay } = require('../utils/bayStaffGuard');
 
 require('dotenv').config();
 
@@ -512,7 +515,23 @@ const checkInTask = async (req, res, next) => {
       });
     }
  
+    const bayStaff = await selectBayStaff(req, bay_id);
+    const selectedBayRecord = await selectBayById(req, bay_id);
+
+    if (!selectedBayRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected bay was not found. Please choose another bay."
+      });
+    }
+
     if(status === 'Check-In'){
+      if (!canCheckInToBay(selectedBayRecord.name, bayStaff)) {
+        return res.status(400).json({
+          success: false,
+          message: "Selected bay has no staff assigned. Please choose a staffed bay or E1."
+        });
+      }
       
       const checkNumber = await checkCheckinNumber(req, bay_id );
   
@@ -538,8 +557,6 @@ const checkInTask = async (req, res, next) => {
 
    
     const result = await insertCheckIN(req, serachMaster.no , 4 , bay_id , status, effectiveType);
-
-    const bayStaff = await selectBayStaff(req, bay_id);
 
     for (const staff of bayStaff) {
       await insertCheckInStaff(req, result.no, staff.staff_id , staff.type);
@@ -847,12 +864,111 @@ const getLastOpenCafiDateCtrl = async (req, res, next) => {
   }
 };
 
+const parseDashboardDate = (value, parameterName) => {
+  const normalizedValue = typeof value === 'string' ? value.trim() : '';
+  if (!normalizedValue) return null;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedValue)) {
+    const error = new Error(`${parameterName} must use the YYYY-MM-DD format`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const parsed = new Date(`${normalizedValue}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalizedValue) {
+    const error = new Error(`${parameterName} is not valid`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return normalizedValue;
+};
+
+const getDashboardDate = (req) => {
+  const value = req.query?.date;
+  if (!value) return null;
+
+  return parseDashboardDate(value, 'date');
+};
+
+const getDashboardDateRange = (req) => {
+  const dateFrom = parseDashboardDate(req.query?.date_from, 'date_from');
+  const dateTo = parseDashboardDate(req.query?.date_to, 'date_to');
+  const legacyDate = getDashboardDate(req);
+
+  if (!dateFrom && !dateTo) {
+    return { dateFrom: legacyDate, dateTo: legacyDate };
+  }
+
+  const normalizedFrom = dateFrom || dateTo;
+  const normalizedTo = dateTo || dateFrom;
+  if (normalizedFrom > normalizedTo) {
+    const error = new Error('date_from must be on or before date_to');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return { dateFrom: normalizedFrom, dateTo: normalizedTo };
+};
+
 const getHourlyCompletedStatsCtrl = async (req, res, next) => {
   try {
-    const result = await getHourlyCompletedStats(req);
+    const selectedDate = getDashboardDate(req);
+    const result = await getHourlyCompletedStats(req, selectedDate);
     res.status(200).json({
       success: true,
       message: "Get hourly completed stats successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getCompletedTaskSummaryCtrl = async (req, res, next) => {
+  try {
+    const scope = typeof req.query?.scope === 'string' ? req.query.scope.trim() : '';
+    const value = typeof req.query?.value === 'string' ? req.query.value.trim() : '';
+    const requestedEndDate = parseDashboardDate(req.query?.end_date, 'end_date');
+    let startDate;
+    let endDate;
+
+    if (scope === 'month' && /^\d{4}-\d{2}$/.test(value)) {
+      const [year, month] = value.split('-').map(Number);
+      if (month < 1 || month > 12) {
+        const error = new Error('Month is not valid');
+        error.statusCode = 400;
+        throw error;
+      }
+      startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+      endDate = month === 12
+        ? `${year + 1}-01-01`
+        : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+    } else if (scope === 'year' && /^\d{4}$/.test(value)) {
+      const year = Number(value);
+      startDate = `${year}-01-01`;
+      endDate = `${year + 1}-01-01`;
+    } else {
+      const error = new Error('Use scope=month with YYYY-MM or scope=year with YYYY');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (requestedEndDate) {
+      if (requestedEndDate < startDate || requestedEndDate >= endDate) {
+        const error = new Error('end_date must fall within the selected month or year');
+        error.statusCode = 400;
+        throw error;
+      }
+      const inclusiveEndDate = new Date(`${requestedEndDate}T00:00:00.000Z`);
+      inclusiveEndDate.setUTCDate(inclusiveEndDate.getUTCDate() + 1);
+      endDate = inclusiveEndDate.toISOString().slice(0, 10);
+    }
+
+    const result = await getCompletedTaskSummary(req, startDate, endDate);
+    res.status(200).json({
+      success: true,
+      message: 'Get completed task summary successfully',
       data: result
     });
   } catch (error) {
@@ -917,7 +1033,8 @@ const getTasksStatusNullCountCtrl = async (req, res, next) => {
 
 const getDashboardStatsCtrl = async (req, res, next) => {
   try {
-    const stats = await getDashboardStats(req);
+    const { dateFrom, dateTo } = getDashboardDateRange(req);
+    const stats = await getDashboardStats(req, dateFrom, dateTo);
 
     res.status(200).json({
       success: true,
@@ -1850,6 +1967,7 @@ module.exports = {
   getAchievementListCtrl,
   getMasterListCtrl2,
   getHourlyCompletedStatsCtrl,
+  getCompletedTaskSummaryCtrl,
   deleteCheckinStaffCtrl,
   getStandyListToday,
   getStockCheckListToday,

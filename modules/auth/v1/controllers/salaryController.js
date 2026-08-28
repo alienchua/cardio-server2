@@ -10,7 +10,12 @@ const {
   getSalaryDetailByBay,
   insertSettlement,
   getSalaryMonthStatusData,
+  getSalaryAbsenceExceptions,
+  getSalaryAbsenceException,
+  upsertSalaryAbsenceException,
+  revokeSalaryAbsenceException,
   getFinanceInputByStaff,
+  getFinanceInputsForMonth,
   getSalarySnapshotByStaff,
   resolveStaffNo,
   upsertSalaryFinanceInputs,
@@ -28,6 +33,10 @@ const {
   getSalaryAdjustmentsForMonth
 } = require('../models/salaryModel');
 const { getStaffTaskList } = require('../models/tasksModel');
+const {
+  getAttendanceAbsenteeism,
+  getDeductibleAbsentDays
+} = require('../utils/salaryCalculation');
 
 require('dotenv').config();
 
@@ -78,11 +87,35 @@ const getSalaryResultByMonth = async (req, res, next) => {
       dateFrom: date_from || null,
       dateTo: date_to || null
     });
+    const exceptionRows = await getSalaryAbsenceExceptions(req, month);
+    const exceptionByStaff = Object.fromEntries(exceptionRows.map((row) => [String(row.staff_no), row]));
+    const data = result.map((row) => {
+      const absenceException = row.is_settlement_snapshot
+        ? row.absence_exception || null
+        : exceptionByStaff[String(row.no)] || null;
+      const production = Number(row.total_com || 0) / 100;
+
+      return {
+        ...row,
+        absence_exception: absenceException
+          ? { status: 'active', waive_deduction: Boolean(absenceException.waive_deduction) }
+          : null,
+        deductible_absent: row.is_settlement_snapshot && row.deductible_absent != null
+          ? Number(row.deductible_absent || 0)
+          : getDeductibleAbsentDays(row.absent, absenceException),
+        normal_absenteeism_deduction: row.is_settlement_snapshot && row.normal_absenteeism_deduction != null
+          ? Number(row.normal_absenteeism_deduction || 0)
+          : getAttendanceAbsenteeism(production, row.absent, null),
+        attendance_absenteeism: row.is_settlement_snapshot && row.attendance_absenteeism != null
+          ? Number(row.attendance_absenteeism || 0)
+          : getAttendanceAbsenteeism(production, row.absent, absenceException)
+      };
+    });
 
     res.status(200).json({
       success: true,
       message: "Staff inserted successfully",
-      data: result
+      data
     });
   } catch (error) {
     next(error);
@@ -180,20 +213,12 @@ const getTaskStaffCount = (task) => {
   return Number(task?.total_staff || 1) || 1;
 };
 
-const getAttendanceAbsenteeism = (production, absent) => {
-  const absentDays = Number(absent || 0);
-  const productionAmount = asMoney(production);
-  if (absentDays > 0 && absentDays <= 2) return asMoney(productionAmount * 0.1);
-  if (absentDays > 2 && absentDays <= 4) return asMoney(productionAmount * 0.2);
-  if (absentDays > 4) return asMoney(productionAmount * 0.25);
-  return 0;
-};
-
 const combineFinanceAndAdjustments = (finance = {}, adjustment = {}) => ({
   ...finance,
   defect_part_tools: asMoney(finance.defect_part_tools) + asMoney(adjustment.defect_part_tools),
   incentive_deduction: asMoney(finance.incentive_deduction) + asMoney(adjustment.incentive_deduction),
   cash_advance_second: asMoney(finance.cash_advance_second) + asMoney(adjustment.cash_advance_second),
+  deposit: asMoney(finance.deposit) + asMoney(adjustment.deposit),
   port_fitment: asMoney(finance.port_fitment) + asMoney(adjustment.port_fitment),
   incentive_addition: asMoney(finance.incentive_addition) + asMoney(adjustment.incentive_addition),
   deposit_release: asMoney(finance.deposit_release) + asMoney(adjustment.deposit_release)
@@ -213,7 +238,7 @@ const getStaffTaskProduction = (tasks = []) => {
   return asMoney(totalCents / 100);
 };
 
-const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, production = 0, basePayRules = DEFAULT_BASE_PAY_RULES }) => {
+const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, production = 0, basePayRules = DEFAULT_BASE_PAY_RULES, absenceException = null }) => {
   const attendance = Number(salaryRow.attendance || 0);
   const absent = Number(salaryRow.absent || 0);
   const late = Number(salaryRow.late || 0);
@@ -230,10 +255,16 @@ const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, prod
   const epf11 = asMoney(basePay * 0.11);
   const epf13 = asMoney(basePay * 0.13);
   const effectiveFinance = combineFinanceAndAdjustments(finance, adjustment);
-  const attendanceAbsenteeism = getAttendanceAbsenteeism(production, absent);
+  const socsoEmployee = asMoney(effectiveFinance.socso);
+  const socsoEmployer = asMoney(effectiveFinance.socso_employer);
+  const sipEmployee = asMoney(effectiveFinance.sip);
+  const sipEmployer = asMoney(effectiveFinance.sip_employer ?? effectiveFinance.sip);
+  const normalAbsenteeismDeduction = getAttendanceAbsenteeism(production, absent, null);
+  const deductibleAbsent = getDeductibleAbsentDays(absent, absenceException);
+  const attendanceAbsenteeism = getAttendanceAbsenteeism(production, absent, absenceException);
   const finalPaymentDeduction =
-    asMoney(effectiveFinance.socso) +
-    asMoney(effectiveFinance.sip) +
+    socsoEmployee +
+    sipEmployee +
     asMoney(effectiveFinance.pcb) +
     asMoney(effectiveFinance.defect_part_tools) +
     attendanceAbsenteeism +
@@ -262,6 +293,10 @@ const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, prod
     mcHlQ: asMoney(mc + hl + q),
     alElUlCl: asMoney(al + el + ul + cl),
     basePay,
+    absenceException,
+    deductibleAbsent,
+    normalAbsenteeismDeduction,
+    attendanceAbsenteeism,
     production: balanceCommission,
     systemDeduction,
     contractorAmount,
@@ -274,13 +309,19 @@ const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, prod
       cash_advance_first: asMoney(effectiveFinance.cash_advance_first),
       first_payment_total: firstPaymentTotal,
       epf_13: epf13,
-      socso: asMoney(effectiveFinance.socso),
-      sip: asMoney(effectiveFinance.sip),
+      socso: socsoEmployee,
+      socso_employee: socsoEmployee,
+      socso_employer: socsoEmployer,
+      sip: sipEmployee,
+      sip_employee: sipEmployee,
+      sip_employer: sipEmployer,
       balance_commission: balanceCommission,
       defect_part_tools: asMoney(effectiveFinance.defect_part_tools),
       pcb: asMoney(effectiveFinance.pcb),
       incentive_deduction: asMoney(effectiveFinance.incentive_deduction),
       attendance_absenteeism: attendanceAbsenteeism,
+      normal_absenteeism_deduction: normalAbsenteeismDeduction,
+      deductible_absent: deductibleAbsent,
       cash_advance_second: asMoney(effectiveFinance.cash_advance_second),
       deposit: asMoney(effectiveFinance.deposit),
       port_fitment: asMoney(effectiveFinance.port_fitment),
@@ -374,10 +415,17 @@ const importSalaryFinanceInputs = async (req, res, next) => {
   const { month, rows } = req.body;
 
   try {
-    if (!month || !Array.isArray(rows) || rows.length === 0) {
+    if (!hasPayrollAccess(req, res)) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
       return res.status(400).json({
         success: false,
-        message: 'month and rows are required'
+        message: 'A valid month in YYYY-MM format is required'
+      });
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Finance rows are required'
       });
     }
 
@@ -392,6 +440,191 @@ const importSalaryFinanceInputs = async (req, res, next) => {
         imported: result.imported,
         errors: result.errors
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const hasPayrollAccess = (req, res) => {
+  const role = String(req.user?.role || '').toLowerCase();
+  if (role === 'admin' || role === 'superadmin') return true;
+  res.status(403).json({ success: false, message: 'Forbidden: payroll access is required' });
+  return false;
+};
+
+const getSalaryAbsenceExceptionsCtrl = async (req, res, next) => {
+  const { month } = req.body || {};
+  try {
+    if (!hasPayrollAccess(req, res)) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
+      return res.status(400).json({ success: false, message: 'A valid month in YYYY-MM format is required' });
+    }
+
+    const [salaryRows, exceptionRows, monthStatus] = await Promise.all([
+      getSalaryResult(req, month),
+      getSalaryAbsenceExceptions(req, month),
+      getSalaryMonthStatusData(req, month)
+    ]);
+    const exceptionByStaff = Object.fromEntries(exceptionRows.map((row) => [String(row.staff_no), row]));
+    const rows = salaryRows
+      .filter((row) => Number(row.absent || 0) > 0)
+      .map((row) => {
+        const absenceException = row.is_settlement_snapshot
+          ? row.absence_exception || null
+          : exceptionByStaff[String(row.no)] || null;
+        const production = Number(row.total_com || 0) / 100;
+        return {
+          staff_no: row.no,
+          staff_id: row.staff_id,
+          staff_name: row.nick_name || row.name || row.staff_name || '',
+          absent: Number(row.absent || 0),
+          total_production: production,
+          deductible_absent: row.is_settlement_snapshot && row.deductible_absent != null
+            ? Number(row.deductible_absent || 0)
+            : getDeductibleAbsentDays(row.absent, absenceException),
+          normal_absenteeism_deduction: row.is_settlement_snapshot && row.normal_absenteeism_deduction != null
+            ? Number(row.normal_absenteeism_deduction || 0)
+            : getAttendanceAbsenteeism(production, row.absent, null),
+          attendance_absenteeism: row.is_settlement_snapshot && row.attendance_absenteeism != null
+            ? Number(row.attendance_absenteeism || 0)
+            : getAttendanceAbsenteeism(production, row.absent, absenceException),
+          absence_exception: absenceException
+        };
+      });
+
+    res.status(200).json({
+      success: true,
+      message: 'Salary absence exceptions loaded',
+      data: { month, is_settled: monthStatus.is_settled, rows }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const upsertSalaryAbsenceExceptionCtrl = async (req, res, next) => {
+  try {
+    if (!hasPayrollAccess(req, res)) return;
+    const result = await upsertSalaryAbsenceException(req, req.body, req.user?.id || null);
+    res.status(200).json({ success: true, message: 'Absence deduction exception saved', data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const revokeSalaryAbsenceExceptionCtrl = async (req, res, next) => {
+  try {
+    if (!hasPayrollAccess(req, res)) return;
+    const result = await revokeSalaryAbsenceException(req, req.body, req.user?.id || null);
+    res.status(200).json({ success: true, message: 'Absence deduction exception revoked', data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getSalaryFinanceExport = async (req, res, next) => {
+  const { month } = req.body;
+
+  try {
+    if (!hasPayrollAccess(req, res)) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid month in YYYY-MM format is required'
+      });
+    }
+
+    const [salaryRows, financeByStaff, adjustmentsByStaff, exceptionRows, basePayRuleData] = await Promise.all([
+      getSalaryResult(req, month),
+      getFinanceInputsForMonth(req, month),
+      getSalaryAdjustmentsForMonth(req, month),
+      getSalaryAbsenceExceptions(req, month),
+      getSalaryBasePayRules(req, month)
+    ]);
+    const exceptionByStaff = Object.fromEntries(
+      exceptionRows.map((row) => [String(row.staff_no), row])
+    );
+
+    const rows = salaryRows.map((salaryRow) => {
+      const staffNo = String(salaryRow.no);
+      const isSnapshot = Boolean(salaryRow.is_settlement_snapshot);
+      const finance = isSnapshot
+        ? salaryRow.finance || {}
+        : financeByStaff[staffNo] || {};
+      const absenceException = isSnapshot
+        ? salaryRow.absence_exception || null
+        : exceptionByStaff[staffNo] || null;
+
+      if (isSnapshot) {
+        const production = Number(
+          salaryRow.total_pay_out ?? salaryRow.production ?? (Number(salaryRow.total_com || 0) / 100)
+        );
+        const snapshotTotals = buildSalaryTotals({
+          salaryRow,
+          finance,
+          production,
+          basePayRules: basePayRuleData.rules,
+          absenceException
+        });
+        return {
+          month,
+          staff: {
+            no: salaryRow.no,
+            staff_id: salaryRow.staff_id,
+            name: salaryRow.name,
+            nick_name: salaryRow.nick_name,
+            ic: salaryRow.ic,
+            bank_name: salaryRow.bank_name,
+            acc_number: salaryRow.acc_number
+          },
+          attendance: Number(salaryRow.attendance || 0),
+          absent: Number(salaryRow.absent || 0),
+          system_deduction: Number(salaryRow.system_deduction ?? salaryRow.total_deduct ?? 0),
+          finance,
+          totals: {
+            ...snapshotTotals.totals,
+            contractor_amount: Number(salaryRow.base_pay || 0),
+            total_pay_out: production,
+            attendance_absenteeism: Number(salaryRow.attendance_absenteeism || 0)
+          }
+        };
+      }
+
+      const production = asMoney(Number(salaryRow.total_com || 0) / 100);
+      const adjustment = adjustmentsByStaff[Number(salaryRow.no)] || {};
+      const salaryTotals = buildSalaryTotals({
+        salaryRow,
+        finance,
+        adjustment,
+        production,
+        basePayRules: basePayRuleData.rules,
+        absenceException
+      });
+
+      return {
+        month,
+        staff: {
+          no: salaryRow.no,
+          staff_id: salaryRow.staff_id,
+          name: salaryRow.name,
+          nick_name: salaryRow.nick_name,
+          ic: salaryRow.ic,
+          bank_name: salaryRow.bank_name,
+          acc_number: salaryRow.acc_number
+        },
+        attendance: salaryTotals.attendance,
+        absent: salaryTotals.absent,
+        system_deduction: salaryTotals.systemDeduction,
+        finance,
+        totals: salaryTotals.totals
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Get salary finance export successfully',
+      data: { rows }
     });
   } catch (error) {
     next(error);
@@ -436,8 +669,11 @@ const getSalaryVoucherSummary = async (req, res, next) => {
     const basePayRules = basePayRuleData.rules;
     const adjustmentsByStaff = snapshot ? {} : await getSalaryAdjustmentsForMonth(req, month, staff.no);
     const adjustment = adjustmentsByStaff[Number(staff.no)] || {};
+    const absenceException = snapshot?.absence_exception || await getSalaryAbsenceException(req, month, staff.no);
 
-    const production = snapshot ? Number(snapshot.production || 0) : getStaffTaskProduction(tasks);
+    const production = snapshot
+      ? Number(snapshot.total_pay_out ?? (Number(snapshot.total_com || 0) / 100))
+      : getStaffTaskProduction(tasks);
     const salaryTotals = snapshot
       ? {
           attendance: Number(snapshot.attendance || 0),
@@ -454,15 +690,34 @@ const getSalaryVoucherSummary = async (req, res, next) => {
           alElUlCl: asMoney(Number(snapshot.al || 0) + Number(snapshot.el || 0) + Number(snapshot.ul || 0) + Number(snapshot.cl || 0)),
           production: Number(snapshot.production || 0),
           systemDeduction: Number(snapshot.system_deduction || 0),
+          absenceException,
+          deductibleAbsent: snapshot.deductible_absent != null
+            ? Number(snapshot.deductible_absent || 0)
+            : getDeductibleAbsentDays(snapshot.absent, absenceException),
+          normalAbsenteeismDeduction: snapshot.normal_absenteeism_deduction != null
+            ? Number(snapshot.normal_absenteeism_deduction || 0)
+            : getAttendanceAbsenteeism(production, snapshot.absent, null),
+          attendanceAbsenteeism: snapshot.attendance_absenteeism != null
+            ? Number(snapshot.attendance_absenteeism || 0)
+            : getAttendanceAbsenteeism(production, snapshot.absent, absenceException),
           totals: {
-            ...buildSalaryTotals({ salaryRow: snapshot, finance, production: Number(snapshot.production || 0), basePayRules }).totals,
+            ...buildSalaryTotals({ salaryRow: snapshot, finance, production, basePayRules, absenceException }).totals,
             contractor_amount: Number(snapshot.base_pay || 0),
             final_balance_payment: Number(snapshot.final_balance_payment || 0),
-            total_pay_out: Number(snapshot.production || 0),
-            nett_production: asMoney(Number(snapshot.production || 0) - asMoney(Number(snapshot.base_pay || 0) * 0.11))
+            total_pay_out: Number(snapshot.total_pay_out ?? production),
+            deductible_absent: snapshot.deductible_absent != null
+              ? Number(snapshot.deductible_absent || 0)
+              : getDeductibleAbsentDays(snapshot.absent, absenceException),
+            normal_absenteeism_deduction: snapshot.normal_absenteeism_deduction != null
+              ? Number(snapshot.normal_absenteeism_deduction || 0)
+              : getAttendanceAbsenteeism(production, snapshot.absent, null),
+            attendance_absenteeism: snapshot.attendance_absenteeism != null
+              ? Number(snapshot.attendance_absenteeism || 0)
+              : getAttendanceAbsenteeism(production, snapshot.absent, absenceException),
+            nett_production: asMoney(production - asMoney(Number(snapshot.base_pay || 0) * 0.11))
           }
         }
-      : buildSalaryTotals({ salaryRow, finance, adjustment, production, basePayRules });
+      : buildSalaryTotals({ salaryRow, finance, adjustment, production, basePayRules, absenceException });
 
     res.status(200).json({
       success: true,
@@ -492,6 +747,10 @@ const getSalaryVoucherSummary = async (req, res, next) => {
         al_el_ul_cl: salaryTotals.alElUlCl,
         production: salaryTotals.production,
         system_deduction: salaryTotals.systemDeduction,
+        absence_exception: salaryTotals.absenceException,
+        deductible_absent: salaryTotals.deductibleAbsent,
+        normal_absenteeism_deduction: salaryTotals.normalAbsenteeismDeduction,
+        attendance_absenteeism: salaryTotals.attendanceAbsenteeism,
         finance,
         adjustments: adjustment.rows || [],
         base_pay_rules: basePayRuleData,
@@ -508,19 +767,30 @@ const getSalaryVoucherSummary = async (req, res, next) => {
 const setSettlement = async (req, res, next) => {
 
   const { month } = req.body;
+  let lockClient;
 
   try {
+    if (!hasPayrollAccess(req, res)) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
+      return res.status(400).json({ success: false, message: 'A valid month in YYYY-MM format is required' });
+    }
+    lockClient = await req.app.get('pool').connect();
+    await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`salary-settlement:${month}`]);
+
     const basePayRuleData = await getSalaryBasePayRules(req, month);
     const basePayRules = basePayRuleData.rules;
     const adjustmentsByStaff = await getSalaryAdjustmentsForMonth(req, month);
+    const exceptionRows = await getSalaryAbsenceExceptions(req, month);
+    const exceptionByStaff = Object.fromEntries(exceptionRows.map((row) => [String(row.staff_no), row]));
     const salaryRows = await getSalaryResult(req, month, { useSnapshot: false });
     const snapshotRows = [];
 
     for (const row of salaryRows) {
       const finance = await getFinanceInputByStaff(req, month, row.no) || {};
       const adjustment = adjustmentsByStaff[Number(row.no)] || {};
+      const absenceException = exceptionByStaff[String(row.no)] || null;
       const production = asMoney(Number(row.total_com || 0) / 100);
-      const totals = buildSalaryTotals({ salaryRow: row, finance, adjustment, production, basePayRules });
+      const totals = buildSalaryTotals({ salaryRow: row, finance, adjustment, production, basePayRules, absenceException });
 
       snapshotRows.push({
         ...row,
@@ -542,6 +812,10 @@ const setSettlement = async (req, res, next) => {
         system_deduction: totals.systemDeduction,
         final_balance_payment: totals.finalBalancePayment,
         total_pay_out: totals.totalPayOut,
+        deductible_absent: totals.deductibleAbsent,
+        normal_absenteeism_deduction: totals.normalAbsenteeismDeduction,
+        attendance_absenteeism: totals.attendanceAbsenteeism,
+        absence_exception: totals.absenceException,
         finance: combineFinanceAndAdjustments(finance, adjustment)
       });
     }
@@ -555,6 +829,14 @@ const setSettlement = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  } finally {
+    if (lockClient) {
+      try {
+        await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`salary-settlement:${month}`]);
+      } finally {
+        lockClient.release();
+      }
+    }
   }
 };
 
@@ -662,6 +944,10 @@ module.exports = {
   getSalaryBasePayRulesCtrl,
   updateSalaryBasePayRulesCtrl,
   importSalaryFinanceInputs,
+  getSalaryAbsenceExceptionsCtrl,
+  upsertSalaryAbsenceExceptionCtrl,
+  revokeSalaryAbsenceExceptionCtrl,
+  getSalaryFinanceExport,
   getSalaryVoucherSummary,
   setSettlement
 };

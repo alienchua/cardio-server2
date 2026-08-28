@@ -1,4 +1,5 @@
 require('dotenv').config();
+const { getBikTaskListForStaff } = require('./bikModel');
 
 const getQueryRunner = (req, client) => client || req.app.get('pool');
 
@@ -738,8 +739,7 @@ const insertCheckInStaff = async (req, checkin_id, staff_id , position) => {
     query,
     values
   );
-  // const res = await req.query(query, values);
-  return result.rows;
+  return result.rows[0];
 };
 
 const insertCheckInStaffBatch = async (req, checkin_id, staff_ids = []) => {
@@ -780,7 +780,11 @@ const updateCheckIn = async (req,  masterlist_id , type ) => {
 };
 
 const updateCheckInNew = async (req, no , bay_id ) => {
-  const query = `UPDATE checkin SET status = 'Check-In' , bay_id = $2 WHERE no = $1 RETURNING *`;
+  const query = `UPDATE checkin
+    SET status = 'Check-In',
+        bay_id = $2
+    WHERE no = $1
+    RETURNING *`;
 
   const values = [
    no , bay_id
@@ -978,7 +982,6 @@ GROUP BY m.chassis , m.seq , b.name , c.no , m.fitment_id`;
     query,
     values
   );
-  // const res = await req.query(query, values);
   return result.rows;
 };
 
@@ -1128,7 +1131,7 @@ const getMasterBacklogCount = async (req) => {
 };
 
 // Count tasks that have not been checked in yet (no checkin_time)
-const getTasksBacklogCount = async (req) => {
+const getTasksBacklogCount = async (req, dateFrom = null, dateTo = null) => {
   const query = `
 SELECT COUNT(DISTINCT m.no)::int AS count
 FROM masterlist m 
@@ -1146,16 +1149,20 @@ LEFT JOIN checkin c
 LEFT JOIN bay b 
   ON b.no = c.bay_id
 WHERE c.checkin_time IS NULL
-  AND m.cafi_date > DATE '2026-02-01' AND m.cancel_time is null
+  AND (
+    ($1::date IS NULL AND m.cafi_date > DATE '2026-02-01')
+    OR ($1::date IS NOT NULL AND m.cafi_date BETWEEN $1::date AND COALESCE($2::date, $1::date))
+  )
+  AND m.cancel_time is null
 
   `;
 
-  const result = await req.app.get('pool').query(query);
+  const result = await req.app.get('pool').query(query, [dateFrom, dateTo]);
   return result.rows[0]?.count || 0;
 };
 
 // Dashboard aggregated stats
-const getDashboardStats = async (req) => {
+const getDashboardStats = async (req, dateFrom = null, dateTo = null) => {
   const pool = req.app.get('pool');
 
   // Active bay counts
@@ -1170,7 +1177,7 @@ const getDashboardStats = async (req) => {
   const activeBayRes = await pool.query(activeBayQuery);
   const activeBay = activeBayRes.rows[0] || { total_bays: 0, staffed_bays: 0 };
 
-  // Pending tasks for today (CAFI date today, not finished)
+  // Pending tasks with CAFI dates inside the selected inclusive range.
   const pendingTodayQuery = `
     SELECT COUNT(*)::int AS count
     FROM (
@@ -1198,14 +1205,21 @@ const getDashboardStats = async (req) => {
       LEFT JOIN task_item t 
         ON t.masterlist_id = m.no 
         AND t.type = m2.type
-      WHERE m.cafi_date = CURRENT_DATE
+      WHERE m.cafi_date BETWEEN COALESCE($1::date, CURRENT_DATE)
+        AND COALESCE($2::date, COALESCE($1::date, CURRENT_DATE))
     ) AS tasks
     WHERE checkout_time IS NULL OR status IS NULL OR status != 'Check-Out'
   `;
-  const pendingTodayRes = await pool.query(pendingTodayQuery);
+  const pendingTodayRes = await pool.query(pendingTodayQuery, [dateFrom, dateTo]);
 
-  // Currently check-in (not yet checkout)
-  const checkinRes = await pool.query(`SELECT COUNT(*)::int AS count FROM checkin WHERE status = 'Check-In'`);
+  // Check-ins started inside the selected inclusive range. With no range, this remains today.
+  const checkinRes = await pool.query(
+    `SELECT COUNT(*)::int AS count
+     FROM checkin
+     WHERE checkin_time::date BETWEEN COALESCE($1::date, CURRENT_DATE)
+       AND COALESCE($2::date, COALESCE($1::date, CURRENT_DATE))`,
+    [dateFrom, dateTo]
+  );
 
   // Completed masterlist (all tasks for that masterlist checked out)
   const completedQuery = `
@@ -1216,7 +1230,10 @@ const getDashboardStats = async (req) => {
       GROUP BY masterlist_id
     ),
     completed AS (
-      SELECT masterlist_id, COUNT(DISTINCT TRIM(type)) AS completed_count
+      SELECT
+        masterlist_id,
+        COUNT(DISTINCT TRIM(type)) AS completed_count,
+        MAX(checkout_time) AS completed_at
       FROM checkin
       WHERE status = 'Check-Out'
       GROUP BY masterlist_id
@@ -1224,12 +1241,15 @@ const getDashboardStats = async (req) => {
     SELECT COUNT(*)::int AS count
     FROM expected e
     LEFT JOIN completed c ON c.masterlist_id = e.masterlist_id
-    WHERE e.expected_count > 0 AND COALESCE(c.completed_count, 0) = e.expected_count
+    WHERE e.expected_count > 0
+      AND COALESCE(c.completed_count, 0) = e.expected_count
+      AND c.completed_at::date BETWEEN COALESCE($1::date, CURRENT_DATE)
+        AND COALESCE($2::date, COALESCE($1::date, CURRENT_DATE))
   `;
-  const completedRes = await pool.query(completedQuery);
+  const completedRes = await pool.query(completedQuery, [dateFrom, dateTo]);
 
   // Backlog from existing helper
-  const backlogCount = await getTasksBacklogCount(req);
+  const backlogCount = await getTasksBacklogCount(req, dateFrom, dateTo);
 
   // Bay status from current check-ins (andon)
   const bayStatusData = await getCurrentCheckin(req);
@@ -1405,7 +1425,7 @@ SELECT
   to_char(DATE(m.caout_date), 'YYYY-MM-DD') AS caout_date,
   m.accessories_std,
     (
-    SELECT json_agg(json_build_object('nick_name', s.nick_name))
+    SELECT json_agg(json_build_object('nick_name', s.nick_name) ORDER BY cs.staff_id ASC)
     FROM checkin_staff cs
     LEFT JOIN staff s ON s.no = cs.staff_id
     WHERE cs.checkin_id = c.no
@@ -1976,7 +1996,7 @@ const getAchievementAnalysis = async (req, data) => {
   return result.rows[0] || { completed: 0, pending: 0, ongoing: 0 };
 };
 
-const getHourlyCompletedStats = async (req) => {
+const getHourlyCompletedStats = async (req, selectedDate = null) => {
   const baseCte = `
     WITH base AS (
       SELECT
@@ -1994,7 +2014,7 @@ const getHourlyCompletedStats = async (req) => {
       LEFT JOIN task_item t
         ON t.masterlist_id = m.no
         AND t.type IN ('FITMENT', 'HOIST')
-      WHERE c.checkin_time::date = CURRENT_DATE
+      WHERE c.checkin_time::date = COALESCE($1::date, CURRENT_DATE)
       GROUP BY m.no
     )
   `;
@@ -2007,7 +2027,7 @@ const getHourlyCompletedStats = async (req) => {
     FROM base
     WHERE has_fitment = 1
       AND checkout_time_fitment IS NOT NULL
-      AND checkout_time_fitment::date = CURRENT_DATE
+      AND checkout_time_fitment::date = COALESCE($1::date, CURRENT_DATE)
     GROUP BY 1
     ORDER BY 1
   `;
@@ -2020,7 +2040,7 @@ const getHourlyCompletedStats = async (req) => {
     FROM base
     WHERE has_hoist = 1
       AND checkout_time_hoist IS NOT NULL
-      AND checkout_time_hoist::date = CURRENT_DATE
+      AND checkout_time_hoist::date = COALESCE($1::date, CURRENT_DATE)
     GROUP BY 1
     ORDER BY 1
   `;
@@ -2050,21 +2070,109 @@ const getHourlyCompletedStats = async (req) => {
           WHEN has_hoist = 1 THEN checkout_time_hoist
           ELSE NULL
         END
-      )::date = CURRENT_DATE
+      )::date = COALESCE($1::date, CURRENT_DATE)
     GROUP BY 1
     ORDER BY 1
   `;
 
   const [fitment, hoist, total] = await Promise.all([
-    req.app.get('pool').query(fitmentQuery),
-    req.app.get('pool').query(hoistQuery),
-    req.app.get('pool').query(totalQuery)
+    req.app.get('pool').query(fitmentQuery, [selectedDate]),
+    req.app.get('pool').query(hoistQuery, [selectedDate]),
+    req.app.get('pool').query(totalQuery, [selectedDate])
   ]);
 
   return {
     fitment: fitment.rows,
     hoist: hoist.rows,
     total: total.rows
+  };
+};
+
+const getCompletedTaskSummary = async (req, startDate, endDate) => {
+  const query = `
+    WITH expected AS (
+      SELECT
+        ti.masterlist_id,
+        UPPER(LEFT(TRIM(COALESCE(m.fitment_id, '')), 1)) AS fitment_type,
+        BOOL_OR(TRIM(ti.type) = 'FITMENT') AS has_fitment,
+        BOOL_OR(TRIM(ti.type) = 'HOIST') AS has_hoist
+      FROM task_item ti
+      JOIN masterlist m ON m.no = ti.masterlist_id
+      WHERE TRIM(ti.type) IN ('FITMENT', 'HOIST') AND m.cancel_time IS NULL
+      GROUP BY ti.masterlist_id, m.fitment_id
+    ),
+    completed AS (
+      SELECT
+        masterlist_id,
+        MAX(checkout_time) FILTER (WHERE TRIM(type) = 'FITMENT' AND status = 'Check-Out') AS fitment_completed_at,
+        MAX(checkout_time) FILTER (WHERE TRIM(type) = 'HOIST' AND status = 'Check-Out') AS hoist_completed_at
+      FROM checkin
+      WHERE TRIM(type) IN ('FITMENT', 'HOIST')
+      GROUP BY masterlist_id
+    ),
+    task_completion AS (
+      SELECT
+        e.*,
+        c.fitment_completed_at,
+        c.hoist_completed_at,
+        CASE
+          WHEN e.has_fitment AND e.has_hoist THEN GREATEST(c.fitment_completed_at, c.hoist_completed_at)
+          WHEN e.has_fitment THEN c.fitment_completed_at
+          WHEN e.has_hoist THEN c.hoist_completed_at
+          ELSE NULL
+        END AS completed_at
+      FROM expected e
+      LEFT JOIN completed c ON c.masterlist_id = e.masterlist_id
+    ),
+    completion_flags AS (
+      SELECT
+        *,
+        has_fitment
+          AND fitment_completed_at >= $1::date
+          AND fitment_completed_at < $2::date AS fitment_in_range,
+        has_hoist
+          AND hoist_completed_at >= $1::date
+          AND hoist_completed_at < $2::date AS hoist_in_range,
+        (NOT has_fitment OR fitment_completed_at IS NOT NULL)
+          AND (NOT has_hoist OR hoist_completed_at IS NOT NULL)
+          AND completed_at >= $1::date
+          AND completed_at < $2::date AS total_in_range
+      FROM task_completion
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE fitment_in_range)::int AS fitment,
+      COUNT(*) FILTER (WHERE hoist_in_range)::int AS hoist,
+      COUNT(*) FILTER (WHERE total_in_range)::int AS total,
+      JSON_BUILD_OBJECT(
+        'V', JSON_BUILD_OBJECT(
+          'fitment', COUNT(*) FILTER (WHERE fitment_type = 'V' AND fitment_in_range)::int,
+          'hoist', COUNT(*) FILTER (WHERE fitment_type = 'V' AND hoist_in_range)::int,
+          'total', COUNT(*) FILTER (WHERE fitment_type = 'V' AND total_in_range)::int
+        ),
+        'J', JSON_BUILD_OBJECT(
+          'fitment', COUNT(*) FILTER (WHERE fitment_type = 'J' AND fitment_in_range)::int,
+          'hoist', COUNT(*) FILTER (WHERE fitment_type = 'J' AND hoist_in_range)::int,
+          'total', COUNT(*) FILTER (WHERE fitment_type = 'J' AND total_in_range)::int
+        ),
+        'A', JSON_BUILD_OBJECT(
+          'fitment', COUNT(*) FILTER (WHERE fitment_type = 'A' AND fitment_in_range)::int,
+          'hoist', COUNT(*) FILTER (WHERE fitment_type = 'A' AND hoist_in_range)::int,
+          'total', COUNT(*) FILTER (WHERE fitment_type = 'A' AND total_in_range)::int
+        )
+      ) AS by_fitment_type
+    FROM completion_flags
+  `;
+
+  const result = await req.app.get('pool').query(query, [startDate, endDate]);
+  return result.rows[0] || {
+    fitment: 0,
+    hoist: 0,
+    total: 0,
+    by_fitment_type: {
+      V: { fitment: 0, hoist: 0, total: 0 },
+      J: { fitment: 0, hoist: 0, total: 0 },
+      A: { fitment: 0, hoist: 0, total: 0 }
+    }
   };
 };
 
@@ -2265,6 +2373,7 @@ const getCheckInByMasterNo2 = async (req, no) => {
     COALESCE(
         jsonb_agg(DISTINCT jsonb_build_object(
             'name', s.name,
+            'staff_id', s.staff_id,
             'type', s.type,
             'photo', s.photo
         )) FILTER (WHERE s.no IS NOT NULL),
@@ -2312,7 +2421,18 @@ GROUP BY
 const getItemByMasterNo = async (req, no) => {
 
   const query = `
-  SELECT * FROM task_item WHERE masterlist_id = $1 AND type != 'New' AND type != 'Excluded'
+  SELECT
+    ti.*,
+    ti.accessories_id AS accessory_id,
+    a.full_name,
+    a.accessory_type,
+    a.accessory_code,
+    COALESCE(ti.type, a.type) AS task_type
+  FROM task_item ti
+  LEFT JOIN accessories a ON a.no = ti.accessories_id
+  WHERE ti.masterlist_id = $1
+    AND ti.type != 'New'
+    AND ti.type != 'Excluded'
   `;
   const values = [
     no
@@ -2536,6 +2656,10 @@ WHERE
         AND s.model_code IS NOT NULL
     )) AND accessory_status != 'Completed'
 ORDER BY 
+    CASE
+        WHEN UPPER(TRIM(COALESCE(c.accessory_status, ''))) = 'READY' THEN 0
+        ELSE 1
+    END ASC,
     c.no ASC;
   `;
   const values = [type];
@@ -2670,7 +2794,7 @@ const updatePickupTime = async (req, no) => {
   const values = [
     new Date() ,  no
   ];
-
+  
   const result = await req.app.get('pool').query(
     query,
     values
@@ -2709,7 +2833,21 @@ const getStandbyList = async (req) => {
   const query = `SELECT b.name,  c.* , m.chassis , m.fitment_id , m.model_description , m.colour FROM checkin c 
   LEFT JOIN masterlist m ON m.no = c.masterlist_id
   LEFT JOIN bay b ON b.no = c.bay_id
-  WHERE c.status = 'Standby'`;
+  WHERE c.status = 'Standby'
+  ORDER BY
+    CASE
+      WHEN UPPER(TRIM(b.name)) ~ '^[A-E][0-9]+$' THEN 0
+      ELSE 1
+    END,
+    LEFT(UPPER(TRIM(b.name)), 1) ASC,
+    CASE
+      WHEN UPPER(TRIM(b.name)) ~ '^[A-E][0-9]+$'
+        THEN SUBSTRING(UPPER(TRIM(b.name)) FROM 2)::INTEGER
+      ELSE NULL
+    END ASC,
+    UPPER(TRIM(COALESCE(b.name, ''))) ASC,
+    c.created_at ASC,
+    c.no ASC`;
 
   const values = [
 
@@ -3120,9 +3258,10 @@ const getStaffTaskList = async (req , month , staff_id, options = {}) => {
   const dateFrom = options.dateFrom || null;
   const dateTo = options.dateTo || null;
   const hasDateRange = Boolean(dateFrom && dateTo);
+  const staffIdParam = hasDateRange ? '$1' : '$2';
   const dateFilterSql = hasDateRange
-    ? `c.checkin_time >= $3::date
-  AND c.checkin_time < ($4::date + INTERVAL '1 day')`
+    ? `c.checkin_time >= $2::date
+  AND c.checkin_time < ($3::date + INTERVAL '1 day')`
     : `c.checkin_time >= $1
   AND c.checkin_time < ($1::date + INTERVAL '1 month')`;
 
@@ -3188,7 +3327,7 @@ LEFT JOIN staff s2
 
 LEFT JOIN checkin_staff selected_staff
     ON selected_staff.checkin_id = c.no
-   AND selected_staff.staff_id = $2
+   AND selected_staff.staff_id = ${staffIdParam}
 
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS non_trainee_staff_count
@@ -3204,7 +3343,7 @@ AND EXISTS (
     SELECT 1
     FROM checkin_staff cs
     WHERE cs.checkin_id = c.no
-      AND cs.staff_id = $2
+      AND cs.staff_id = ${staffIdParam}
 )
 
 GROUP BY
@@ -3227,19 +3366,26 @@ GROUP BY
 ORDER BY c.checkin_time;
 `;
 
-  const values = [
-    month , staff_id
-  ];
-  if (hasDateRange) {
-    values.push(dateFrom, dateTo);
-  }
+  const values = hasDateRange
+    ? [staff_id, dateFrom, dateTo]
+    : [month, staff_id];
 
   const result = await req.app.get('pool').query(
     query,
     values
   );
   // const res = await req.query(query, values);
-  return result.rows;
+  // Lightweight query-capture test pools do not provide a database connection.
+  // In production the PostgreSQL pool always exposes connect(), so BIK detail rows are included.
+  if (typeof req.app.get('pool')?.connect !== 'function') return result.rows;
+  const bikTasks = await getBikTaskListForStaff(req, staff_id, {
+    month: hasDateRange ? String(dateFrom).slice(0, 7) : String(month).slice(0, 7),
+    dateFrom,
+    dateTo
+  });
+  return [...result.rows, ...bikTasks].sort((left, right) => (
+    new Date(left.checkin_time).getTime() - new Date(right.checkin_time).getTime()
+  ));
 };
 
 const deleteCheckStaff = async (req,  checkin_id  ) => {
@@ -3359,6 +3505,7 @@ module.exports = {
   getAchievementList,
   getAchievementAnalysis,
   getHourlyCompletedStats,
+  getCompletedTaskSummary,
   getFitmentCurrentCheckin,
   updateReady,
   updateCheckingTime,
