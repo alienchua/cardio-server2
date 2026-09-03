@@ -1149,6 +1149,17 @@ const getFinanceInputByStaff = async (req, month, staffNo) => {
   return result.rows[0] || null;
 };
 
+const getFinanceInputsForMonth = async (req, month) => {
+  await ensureSalaryFinanceTables(req);
+
+  const result = await req.app.get('pool').query(
+    `SELECT * FROM salary_finance_inputs WHERE month = $1`,
+    [month]
+  );
+
+  return Object.fromEntries(result.rows.map((row) => [String(row.staff_no), row]));
+};
+
 const getSalarySnapshotByStaff = async (req, month, staffNo) => {
   await ensureSalaryFinanceTables(req);
 
@@ -1418,6 +1429,7 @@ module.exports = {
   getSalaryDetailByBay,
   getSalaryMonthStatusData,
   getFinanceInputByStaff,
+  getFinanceInputsForMonth,
   getSalarySnapshotByStaff,
   getSalarySnapshotRows,
   resolveStaffNo,

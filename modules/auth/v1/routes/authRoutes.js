@@ -65,6 +65,7 @@ const {
   getSalaryBasePayRulesCtrl,
   updateSalaryBasePayRulesCtrl,
   importSalaryFinanceInputs,
+  getSalaryFinanceExport,
   getSalaryVoucherSummary,
   setSettlement} = require('../controllers/salaryController');
 
@@ -96,6 +97,8 @@ const {
   getTasksListCtrl2,
   getAchievementListCtrl,
   getHourlyCompletedStatsCtrl,
+  getCompletedTaskSummaryCtrl,
+  getDailyVehicleModelSummaryCtrl,
   getMasterListCtrl2,
   deleteCheckinStaffCtrl,
   getStandyListToday,
@@ -185,6 +188,7 @@ router.post('/getSalaryMonthStatus', getSalaryMonthStatus);
 router.post('/getSalaryBasePayRules', getSalaryBasePayRulesCtrl);
 router.post('/updateSalaryBasePayRules', updateSalaryBasePayRulesCtrl);
 router.post('/importSalaryFinanceInputs', importSalaryFinanceInputs);
+router.post('/getSalaryFinanceExport', auth, getSalaryFinanceExport);
 router.post('/getSalaryVoucherSummary', getSalaryVoucherSummary);
 router.post('/updateStaffBay', updateStaffBay);
 router.post('/setSettlement', setSettlement);
@@ -229,6 +233,8 @@ router.post('/getTasksListCtrl2', getTasksListCtrl2);
 router.get('/getTasksStatusNullCount', getTasksStatusNullCountCtrl);
 router.post('/getAchievementListCtrl', getAchievementListCtrl);
 router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);
+router.get('/getCompletedTaskSummaryCtrl', getCompletedTaskSummaryCtrl);
+router.get('/getDailyVehicleModelSummaryCtrl', getDailyVehicleModelSummaryCtrl);
 router.post('/getMasterListCtrl2', getMasterListCtrl2);
 router.post('/cancelMasterlistRange', cancelMasterlistRangeCtrl);
 router.post('/deleteCheckinStaffCtrl', deleteCheckinStaffCtrl);

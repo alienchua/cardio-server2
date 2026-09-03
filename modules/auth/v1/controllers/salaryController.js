@@ -11,6 +11,7 @@ const {
   insertSettlement,
   getSalaryMonthStatusData,
   getFinanceInputByStaff,
+  getFinanceInputsForMonth,
   getSalarySnapshotByStaff,
   resolveStaffNo,
   upsertSalaryFinanceInputs,
@@ -431,6 +432,70 @@ const importSalaryFinanceInputs = async (req, res, next) => {
   }
 };
 
+const getSalaryFinanceExport = async (req, res, next) => {
+  const { month } = req.body || {};
+
+  try {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ''))) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid month in YYYY-MM format is required'
+      });
+    }
+
+    const [salaryRows, financeByStaff, adjustmentsByStaff, basePayRuleData] = await Promise.all([
+      getSalaryResult(req, month),
+      getFinanceInputsForMonth(req, month),
+      getSalaryAdjustmentsForMonth(req, month),
+      getSalaryBasePayRules(req, month)
+    ]);
+
+    const rows = salaryRows.map((salaryRow) => {
+      const isSnapshot = Boolean(salaryRow.is_settlement_snapshot);
+      const finance = isSnapshot
+        ? (salaryRow.finance || {})
+        : (financeByStaff[String(salaryRow.no)] || {});
+      const adjustment = isSnapshot ? {} : (adjustmentsByStaff[Number(salaryRow.no)] || {});
+      const production = isSnapshot
+        ? Number(salaryRow.total_pay_out ?? salaryRow.production ?? (Number(salaryRow.total_com || 0) / 100))
+        : Number(salaryRow.total_com || 0) / 100;
+      const salaryTotals = buildSalaryTotals({
+        salaryRow,
+        finance,
+        adjustment,
+        production,
+        basePayRules: basePayRuleData.rules
+      });
+
+      return {
+        month,
+        staff: {
+          no: salaryRow.no,
+          staff_id: salaryRow.staff_id,
+          name: salaryRow.name,
+          nick_name: salaryRow.nick_name,
+          ic: salaryRow.ic,
+          bank_name: salaryRow.bank_name,
+          acc_number: salaryRow.acc_number
+        },
+        attendance: salaryTotals.attendance,
+        absent: salaryTotals.absent,
+        system_deduction: salaryTotals.systemDeduction,
+        finance,
+        totals: salaryTotals.totals
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Get salary finance export successfully',
+      data: { rows }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getSalaryVoucherSummary = async (req, res, next) => {
   const { month, staff_no, staff_id, date_from, date_to } = req.body;
   const rangeOptions = {
@@ -728,6 +793,7 @@ module.exports = {
   getSalaryBasePayRulesCtrl,
   updateSalaryBasePayRulesCtrl,
   importSalaryFinanceInputs,
+  getSalaryFinanceExport,
   getSalaryVoucherSummary,
   setSettlement
 };

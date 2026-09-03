@@ -31,6 +31,8 @@ const {
   getAchievementList,
   getAchievementAnalysis,
   getHourlyCompletedStats,
+  getCompletedTaskSummary,
+  getDailyVehicleModelSummary,
   deleteCheckinStaff,
   getStandyList,
   getStockCheckList,
@@ -849,10 +851,72 @@ const getLastOpenCafiDateCtrl = async (req, res, next) => {
 
 const getHourlyCompletedStatsCtrl = async (req, res, next) => {
   try {
-    const result = await getHourlyCompletedStats(req);
+    const date = String(req.query?.date || new Date().toISOString().slice(0, 10)).trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Use date=YYYY-MM-DD'
+      });
+    }
+    const result = await getHourlyCompletedStats(req, date);
     res.status(200).json({
       success: true,
       message: "Get hourly completed stats successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getCompletedTaskSummaryCtrl = async (req, res, next) => {
+  try {
+    const scope = String(req.query?.scope || '').trim();
+    const value = String(req.query?.value || '').trim();
+    let startDate;
+    let endDate;
+
+    if (scope === 'month' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value)) {
+      const [year, month] = value.split('-').map(Number);
+      startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+      endDate = month === 12
+        ? `${year + 1}-01-01`
+        : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+    } else if (scope === 'year' && /^\d{4}$/.test(value)) {
+      startDate = `${value}-01-01`;
+      endDate = `${Number(value) + 1}-01-01`;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Use scope=month with YYYY-MM or scope=year with YYYY'
+      });
+    }
+
+    const result = await getCompletedTaskSummary(req, startDate, endDate);
+    res.status(200).json({
+      success: true,
+      message: 'Get completed task summary successfully',
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getDailyVehicleModelSummaryCtrl = async (req, res, next) => {
+  try {
+    const date = String(req.query?.date || '').trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Use date=YYYY-MM-DD'
+      });
+    }
+
+    const result = await getDailyVehicleModelSummary(req, date);
+    res.status(200).json({
+      success: true,
+      message: 'Get daily vehicle model summary successfully',
       data: result
     });
   } catch (error) {
@@ -1850,6 +1914,8 @@ module.exports = {
   getAchievementListCtrl,
   getMasterListCtrl2,
   getHourlyCompletedStatsCtrl,
+  getCompletedTaskSummaryCtrl,
+  getDailyVehicleModelSummaryCtrl,
   deleteCheckinStaffCtrl,
   getStandyListToday,
   getStockCheckListToday,
