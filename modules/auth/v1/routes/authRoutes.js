@@ -68,6 +68,13 @@ const {
   getSalaryVoucherSummary,
   setSettlement} = require('../controllers/salaryController');
 
+  const {
+    getBikTasksCtrl,
+    createBikTaskCtrl,
+    updateBikTaskCtrl,
+    deleteBikTaskCtrl
+  } = require('../controllers/bikController');
+
 const { 
   insertMasterlistWithAccessories,
   insertMasterlistWithAccessoriesResolved,
@@ -279,6 +286,13 @@ router.post('/getInstallmentByNo', getInstallmentByNoCtrl);
 router.post('/getAdjustmentsBySource', getAdjustmentsBySourceCtrl);
 router.post('/updateAdjustment', updateAdjustmentCtrl);
 router.post('/cancelAdjustment', cancelAdjustmentCtrl);
+
+
+//bik
+router.post('/getBikTasks', auth, getBikTasksCtrl);
+router.post('/createBikTask', auth, createBikTaskCtrl);
+router.post('/updateBikTask', auth, updateBikTaskCtrl);
+router.post('/deleteBikTask', auth, deleteBikTaskCtrl);
 
 
 module.exports = router;

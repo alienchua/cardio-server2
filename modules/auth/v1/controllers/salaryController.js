@@ -110,16 +110,40 @@ const getSalaryDetailByStaff = async (req, res, next) => {
 };
 
 const getSalaryVoucherDetail = async (req, res, next) => {
-  const { month, staff_id, date_from, date_to } = req.body;
+  const { month, staff_no, staff_id, date_from, date_to } = req.body;
+  let client;
   try {
-    if (!month || !staff_id) {
+    const staffKey = staff_no || staff_id;
+    if (!month || !staffKey) {
       return res.status(400).json({
         success: false,
-        message: 'month and staff_id are required'
+        message: 'month and staff_no or staff_id are required'
+      });
+    }
+    let resolvedStaffNo = staff_no;
+    if (!resolvedStaffNo) {
+      client = await req.app.get('pool').connect();
+      const staffResult = await client.query(
+        `
+          SELECT no
+          FROM staff
+          WHERE staff_id::text = $1
+          LIMIT 1
+        `,
+        [String(staff_id || '')]
+      );
+      resolvedStaffNo = staffResult.rows[0]?.no;
+      client.release();
+      client = null;
+    }
+    if (!resolvedStaffNo) {
+      return res.status(404).json({
+        success: false,
+        message: 'Staff not found'
       });
     }
     const startDate = `${month}-01`;
-    const tasks = await getStaffTaskList(req, startDate, staff_id, {
+    const tasks = await getStaffTaskList(req, startDate, resolvedStaffNo, {
       dateFrom: date_from || null,
       dateTo: date_to || null
     });
@@ -130,6 +154,8 @@ const getSalaryVoucherDetail = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  } finally {
+    if (client) client.release();
   }
 };
 
@@ -189,6 +215,8 @@ const getAttendanceAbsenteeism = (production, absent) => {
   return 0;
 };
 
+const hasMoneyValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
+
 const combineFinanceAndAdjustments = (finance = {}, adjustment = {}) => ({
   ...finance,
   defect_part_tools: asMoney(finance.defect_part_tools) + asMoney(adjustment.defect_part_tools),
@@ -242,7 +270,10 @@ const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, prod
     asMoney(effectiveFinance.incentive_deduction);
   const financeAddition = asMoney(effectiveFinance.incentive_addition) + asMoney(effectiveFinance.deposit_release) + asMoney(effectiveFinance.port_fitment);
   const contractorAmount = asMoney(basePay);
-  const nettProduction = asMoney(production - epf11);
+  const socsoEmployer = hasMoneyValue(effectiveFinance.socso_employer) ? asMoney(effectiveFinance.socso_employer) : 0;
+  const sipEmployer = hasMoneyValue(effectiveFinance.sip_employer) ? asMoney(effectiveFinance.sip_employer) : asMoney(effectiveFinance.sip);
+  const contributionGroupD = socsoEmployer + sipEmployer;
+  const nettProduction = asMoney(production - epf13 - contributionGroupD);
   const balanceCommission = asMoney(nettProduction - contractorAmount);
   const firstPaymentTotal = asMoney(contractorAmount - epf11 - asMoney(effectiveFinance.cash_advance_first));
   const finalBalancePayment = asMoney(balanceCommission - systemDeduction - finalPaymentDeduction + financeAddition);
@@ -276,6 +307,8 @@ const buildSalaryTotals = ({ salaryRow = {}, finance = {}, adjustment = {}, prod
       epf_13: epf13,
       socso: asMoney(effectiveFinance.socso),
       sip: asMoney(effectiveFinance.sip),
+      socso_employer: socsoEmployer,
+      sip_employer: sipEmployer,
       balance_commission: balanceCommission,
       defect_part_tools: asMoney(effectiveFinance.defect_part_tools),
       pcb: asMoney(effectiveFinance.pcb),
@@ -399,7 +432,7 @@ const importSalaryFinanceInputs = async (req, res, next) => {
 };
 
 const getSalaryVoucherSummary = async (req, res, next) => {
-  const { month, staff_id, date_from, date_to } = req.body;
+  const { month, staff_no, staff_id, date_from, date_to } = req.body;
   const rangeOptions = {
     dateFrom: date_from || null,
     dateTo: date_to || null
@@ -408,15 +441,43 @@ const getSalaryVoucherSummary = async (req, res, next) => {
   let client;
 
   try {
-    if (!month || !staff_id) {
+    if (!month || (!staff_no && !staff_id)) {
       return res.status(400).json({
         success: false,
-        message: 'month and staff_id are required'
+        message: 'month and staff_no or staff_id are required'
       });
     }
 
     client = await req.app.get('pool').connect();
-    const staff = await resolveStaffNo(client, staff_id);
+    const staff = staff_no
+      ? (await client.query(
+          `
+            SELECT no, staff_id, name, nick_name, ic, bank_name, acc_number
+            FROM staff
+            WHERE no::text = $1
+            LIMIT 1
+          `,
+          [String(staff_no || '')]
+        )).rows[0] || null
+      : (await client.query(
+          `
+            SELECT no, staff_id, name, nick_name, ic, bank_name, acc_number
+            FROM staff
+            WHERE staff_id::text = $1
+            LIMIT 1
+          `,
+          [String(staff_id || '')]
+        )).rows[0] || null;
+    console.log('[getSalaryVoucherSummary] staff lookup', {
+      input_staff_no: staff_no || null,
+      input_staff_id: staff_id || null,
+      resolved_no: staff?.no || null,
+      resolved_staff_id: staff?.staff_id || null,
+      resolved_name: staff?.name || null,
+      month,
+      date_from: date_from || null,
+      date_to: date_to || null
+    });
     client.release();
     client = null;
 
@@ -459,7 +520,12 @@ const getSalaryVoucherSummary = async (req, res, next) => {
             contractor_amount: Number(snapshot.base_pay || 0),
             final_balance_payment: Number(snapshot.final_balance_payment || 0),
             total_pay_out: Number(snapshot.production || 0),
-            nett_production: asMoney(Number(snapshot.production || 0) - asMoney(Number(snapshot.base_pay || 0) * 0.11))
+            nett_production: asMoney(
+              Number(snapshot.production || 0)
+              - asMoney(Number(snapshot.base_pay || 0) * 0.13)
+              - (hasMoneyValue(finance.socso_employer) ? asMoney(finance.socso_employer) : 0)
+              - (hasMoneyValue(finance.sip_employer) ? asMoney(finance.sip_employer) : asMoney(finance.sip))
+            )
           }
         }
       : buildSalaryTotals({ salaryRow, finance, adjustment, production, basePayRules });
