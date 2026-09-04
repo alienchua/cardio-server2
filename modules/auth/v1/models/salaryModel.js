@@ -471,7 +471,9 @@ const ensureSalaryFinanceTables = async (req) => {
         cash_advance_first NUMERIC(12,2) DEFAULT 0,
         cash_advance_second NUMERIC(12,2) DEFAULT 0,
         socso NUMERIC(12,2) DEFAULT 0,
+        socso_employer NUMERIC(12,2) DEFAULT 0,
         sip NUMERIC(12,2) DEFAULT 0,
+        sip_employer NUMERIC(12,2) DEFAULT 0,
         pcb NUMERIC(12,2) DEFAULT 0,
         defect_part_tools NUMERIC(12,2) DEFAULT 0,
         attendance_absenteeism NUMERIC(12,2) DEFAULT 0,
@@ -483,6 +485,12 @@ const ensureSalaryFinanceTables = async (req) => {
         imported_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
         UNIQUE (month, staff_no)
       )
+    `);
+
+    await client.query(`
+      ALTER TABLE salary_finance_inputs
+      ADD COLUMN IF NOT EXISTS socso_employer NUMERIC(12,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS sip_employer NUMERIC(12,2) DEFAULT 0
     `);
 
     await client.query(`
@@ -746,7 +754,7 @@ const getAdjustments = async (req) => {
 
   const result = await req.app.get('pool').query(
     `
-      SELECT a.*, s.name, s.staff_id AS staff_code,
+      SELECT a.*, s.name, s.nick_name, s.staff_id AS staff_code,
         COALESCE(schedule.months, ARRAY[]::text[]) AS schedule_months,
         CASE
           WHEN array_length(schedule.months, 1) > 0 THEN schedule.months[array_length(schedule.months, 1)]
@@ -772,7 +780,7 @@ const getAdjustmentByNo = async (req, id) => {
 
   const result = await req.app.get('pool').query(
     `
-      SELECT a.*, s.name, s.staff_id AS staff_code,
+      SELECT a.*, s.name, s.nick_name, s.staff_id AS staff_code,
         COALESCE(schedule.months, ARRAY[]::text[]) AS schedule_months,
         CASE
           WHEN array_length(schedule.months, 1) > 0 THEN schedule.months[array_length(schedule.months, 1)]
@@ -1226,7 +1234,9 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
         money(input.cash_advance_first),
         money(input.cash_advance_second),
         money(input.socso),
+        money(input.socso_employer),
         money(input.sip),
+        money(input.sip_employer),
         money(input.pcb),
         money(input.defect_part_tools),
         money(input.attendance_absenteeism),
@@ -1241,10 +1251,10 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
         `
           INSERT INTO salary_finance_inputs (
             month, staff_no, staff_id, epf_11, epf_13, cash_advance_first, cash_advance_second,
-            socso, sip, pcb, defect_part_tools, attendance_absenteeism, incentive_deduction,
+            socso, socso_employer, sip, sip_employer, pcb, defect_part_tools, attendance_absenteeism, incentive_deduction,
             incentive_addition, deposit, deposit_release, finance_remarks, imported_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
           ON CONFLICT (month, staff_no)
           DO UPDATE SET
             staff_id = EXCLUDED.staff_id,
@@ -1253,7 +1263,9 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
             cash_advance_first = EXCLUDED.cash_advance_first,
             cash_advance_second = EXCLUDED.cash_advance_second,
             socso = EXCLUDED.socso,
+            socso_employer = EXCLUDED.socso_employer,
             sip = EXCLUDED.sip,
+            sip_employer = EXCLUDED.sip_employer,
             pcb = EXCLUDED.pcb,
             defect_part_tools = EXCLUDED.defect_part_tools,
             attendance_absenteeism = EXCLUDED.attendance_absenteeism,

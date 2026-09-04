@@ -12,7 +12,8 @@ const {
   getBayCheckinList,
   getBayHistoryByDate,
   insertBayLog,
-  getBayPerformanceAnalytics
+  getBayPerformanceAnalytics,
+  getBayPerformanceSummary
 } = require('../models/bayModel');
 const { resetBayAssignments } = require('../../../../utils/bayReset');
 
@@ -79,6 +80,26 @@ const getBayPerformanceCtrl = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+const getBayPerformanceSummaryCtrl = async (req, res, next) => {
+  const startDate = req.query.date_from || req.query.date;
+  const endDate = req.query.date_to || startDate;
+
+  if (!startDate) {
+    return res.status(400).json({ success: false, message: 'date_from is required' });
+  }
+
+  try {
+    const result = await getBayPerformanceSummary(req, startDate, endDate);
+    return res.status(200).json({
+      success: true,
+      message: 'Bay performance summary fetched successfully',
+      data: result
+    });
+  } catch (error) {
+    return next(error);
   }
 };
 
@@ -265,5 +286,6 @@ module.exports = {
   runBayResetCtrl,
   getBayCheckinListCtrl,
   getBayHistoryCtrl,
-  getBayPerformanceCtrl
+  getBayPerformanceCtrl,
+  getBayPerformanceSummaryCtrl
 };

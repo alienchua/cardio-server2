@@ -1978,7 +1978,11 @@ const getAchievementAnalysis = async (req, data) => {
   return result.rows[0] || { completed: 0, pending: 0, ongoing: 0 };
 };
 
-const getHourlyCompletedStats = async (req, date) => {
+const getHourlyCompletedStats = async (req, date, endDate = date) => {
+  const isSingleDay = date === endDate;
+  const datePredicate = (column) => isSingleDay
+    ? `${column}::date = $1::date`
+    : `${column}::date BETWEEN $1::date AND $2::date`;
   const baseCte = `
     WITH base AS (
       SELECT
@@ -1996,7 +2000,9 @@ const getHourlyCompletedStats = async (req, date) => {
       LEFT JOIN task_item t
         ON t.masterlist_id = m.no
         AND t.type IN ('FITMENT', 'HOIST')
-      WHERE c.checkin_time::date = $1::date
+      WHERE ${datePredicate('c.checkout_time')}
+        AND c.status = 'Check-Out'
+        AND m.cancel_time IS NULL
       GROUP BY m.no
     )
   `;
@@ -2009,7 +2015,7 @@ const getHourlyCompletedStats = async (req, date) => {
     FROM base
     WHERE has_fitment = 1
       AND checkout_time_fitment IS NOT NULL
-      AND checkout_time_fitment::date = $1::date
+      AND ${datePredicate('checkout_time_fitment')}
     GROUP BY 1
     ORDER BY 1
   `;
@@ -2022,51 +2028,62 @@ const getHourlyCompletedStats = async (req, date) => {
     FROM base
     WHERE has_hoist = 1
       AND checkout_time_hoist IS NOT NULL
-      AND checkout_time_hoist::date = $1::date
+      AND ${datePredicate('checkout_time_hoist')}
     GROUP BY 1
     ORDER BY 1
   `;
 
-  const totalQuery = `
-    ${baseCte}
+  const caoutHourlyQuery = `
     SELECT
-      to_char(date_trunc('hour',
-        CASE
-          WHEN has_fitment = 1 AND has_hoist = 1 THEN GREATEST(checkout_time_fitment, checkout_time_hoist)
-          WHEN has_fitment = 1 THEN checkout_time_fitment
-          WHEN has_hoist = 1 THEN checkout_time_hoist
-          ELSE NULL
-        END
-      ), 'HH24:00') AS hour,
+      to_char(date_trunc('hour', m.caout_time), 'HH24:00') AS hour,
       COUNT(*)::int AS count
-    FROM base
-    WHERE (
-        (has_fitment = 1 AND has_hoist = 1 AND checkout_time_fitment IS NOT NULL AND checkout_time_hoist IS NOT NULL)
-        OR (has_fitment = 1 AND has_hoist = 0 AND checkout_time_fitment IS NOT NULL)
-        OR (has_fitment = 0 AND has_hoist = 1 AND checkout_time_hoist IS NOT NULL)
-      )
-      AND (
-        CASE
-          WHEN has_fitment = 1 AND has_hoist = 1 THEN GREATEST(checkout_time_fitment, checkout_time_hoist)
-          WHEN has_fitment = 1 THEN checkout_time_fitment
-          WHEN has_hoist = 1 THEN checkout_time_hoist
-          ELSE NULL
-        END
-      )::date = $1::date
+    FROM masterlist m
+    WHERE ${datePredicate('m.caout_date')}
+      AND m.caout_time IS NOT NULL
+      AND m.cancel_time IS NULL
     GROUP BY 1
     ORDER BY 1
   `;
 
-  const [fitment, hoist, total] = await Promise.all([
-    req.app.get('pool').query(fitmentQuery, [date]),
-    req.app.get('pool').query(hoistQuery, [date]),
-    req.app.get('pool').query(totalQuery, [date])
+  const caoutCountQuery = `
+    SELECT
+      COUNT(*)::int AS count,
+      COUNT(*) FILTER (WHERE UPPER(LEFT(TRIM(COALESCE(m.fitment_id, '')), 1)) = 'V')::int AS v,
+      COUNT(*) FILTER (WHERE UPPER(LEFT(TRIM(COALESCE(m.fitment_id, '')), 1)) = 'A')::int AS a,
+      COUNT(*) FILTER (WHERE UPPER(LEFT(TRIM(COALESCE(m.fitment_id, '')), 1)) = 'J')::int AS j
+    FROM masterlist m
+    WHERE ${datePredicate('m.caout_date')}
+      AND m.cancel_time IS NULL
+  `;
+
+  const pendingCaoutQuery = `
+    SELECT COUNT(*)::int AS count
+    FROM masterlist m
+    WHERE ${datePredicate('m.cafi_date')}
+      AND m.caout_date IS NULL
+      AND m.cancel_time IS NULL
+  `;
+
+  const values = isSingleDay ? [date] : [date, endDate];
+  const [fitment, hoist, total, caoutCount, pendingCaout] = await Promise.all([
+    req.app.get('pool').query(fitmentQuery, values),
+    req.app.get('pool').query(hoistQuery, values),
+    req.app.get('pool').query(caoutHourlyQuery, values),
+    req.app.get('pool').query(caoutCountQuery, values),
+    req.app.get('pool').query(pendingCaoutQuery, values)
   ]);
 
   return {
     fitment: fitment.rows,
     hoist: hoist.rows,
-    total: total.rows
+    total: total.rows,
+    caoutCount: Number(caoutCount.rows[0]?.count || 0),
+    pendingCaoutCount: Number(pendingCaout.rows[0]?.count || 0),
+    caoutByType: {
+      v: Number(caoutCount.rows[0]?.v || 0),
+      a: Number(caoutCount.rows[0]?.a || 0),
+      j: Number(caoutCount.rows[0]?.j || 0)
+    }
   };
 };
 
@@ -2158,33 +2175,125 @@ const getCompletedTaskSummary = async (req, startDate, endDate) => {
   };
 };
 
-const getDailyVehicleModelSummary = async (req, date) => {
+const getDailyVehicleModelSummary = async (req, date, endDate = date) => {
+  const isSingleDay = date === endDate;
+  const completionDateFilter = isSingleDay
+    ? "completed_at >= $1::date AND completed_at < $1::date + INTERVAL '1 day'"
+    : "completed_at >= $1::date AND completed_at < $2::date + INTERVAL '1 day'";
+  const completionCandidateFilter = isSingleDay
+    ? "c.checkout_time >= $1::date AND c.checkout_time < $1::date + INTERVAL '1 day'"
+    : "c.checkout_time >= $1::date AND c.checkout_time < $2::date + INTERVAL '1 day'";
   const query = `
-    WITH daily_models AS (
+    WITH base_models AS (
       SELECT
+        m.no AS masterlist_id,
         COALESCE(
-          NULLIF(TRIM(model_description), ''),
-          NULLIF(TRIM(model_code), ''),
+          NULLIF(TRIM(m.model_description), ''),
+          NULLIF(TRIM(m.model_code), ''),
           'Unknown Model'
         ) AS model,
-        UPPER(LEFT(TRIM(COALESCE(fitment_id, '')), 1)) AS fitment_type
-      FROM masterlist
-      WHERE cafi_date = $1::date
-        AND cancel_time IS NULL
+        UPPER(LEFT(TRIM(COALESCE(m.fitment_id, '')), 1)) AS fitment_type
+      FROM masterlist m
+      WHERE m.cancel_time IS NULL
+        AND UPPER(LEFT(TRIM(COALESCE(m.fitment_id, '')), 1)) IN ('V', 'A', 'J')
+        AND EXISTS (
+          SELECT 1
+          FROM checkin c
+          WHERE c.masterlist_id = m.no
+            AND c.status = 'Check-Out'
+            AND TRIM(c.type) IN ('FITMENT', 'HOIST')
+            AND ${completionCandidateFilter}
+        )
+    ),
+    standard_times AS (
+      SELECT
+        ti.masterlist_id,
+        COALESCE(SUM(ti.duration) FILTER (WHERE TRIM(ti.type) IN ('FITMENT', 'HOIST')), 0)::numeric AS std_minutes,
+        BOOL_OR(TRIM(ti.type) = 'FITMENT') AS has_fitment,
+        BOOL_OR(TRIM(ti.type) = 'HOIST') AS has_hoist
+      FROM task_item ti
+      JOIN base_models bm ON bm.masterlist_id = ti.masterlist_id
+      WHERE TRIM(ti.type) IN ('FITMENT', 'HOIST')
+      GROUP BY ti.masterlist_id
+    ),
+    actual_times AS (
+      SELECT
+        c.masterlist_id,
+        COALESCE(SUM(
+          CASE
+            WHEN c.checkin_time IS NOT NULL AND c.checkout_time IS NOT NULL
+              AND c.checkout_time >= c.checkin_time
+              AND c.status = 'Check-Out'
+            THEN EXTRACT(EPOCH FROM (c.checkout_time - c.checkin_time)) / 60.0
+            ELSE 0
+          END
+        ) FILTER (WHERE TRIM(c.type) IN ('FITMENT', 'HOIST')), 0)::numeric AS act_minutes,
+        MAX(c.checkout_time) FILTER (WHERE TRIM(c.type) = 'FITMENT' AND c.status = 'Check-Out') AS fitment_completed_at,
+        MAX(c.checkout_time) FILTER (WHERE TRIM(c.type) = 'HOIST' AND c.status = 'Check-Out') AS hoist_completed_at,
+        BOOL_OR(TRIM(c.type) = 'FITMENT' AND c.status = 'Check-Out' AND c.checkin_time IS NOT NULL AND c.checkout_time >= c.checkin_time) AS fitment_valid_timing,
+        BOOL_OR(TRIM(c.type) = 'HOIST' AND c.status = 'Check-Out' AND c.checkin_time IS NOT NULL AND c.checkout_time >= c.checkin_time) AS hoist_valid_timing
+      FROM checkin c
+      JOIN base_models bm ON bm.masterlist_id = c.masterlist_id
+      GROUP BY c.masterlist_id
+    ),
+    vehicle_rows AS (
+      SELECT
+        bm.*,
+        COALESCE(st.std_minutes, 0) AS std_minutes,
+        COALESCE(at.act_minutes, 0) AS act_minutes,
+        CASE
+          WHEN st.has_fitment AND st.has_hoist THEN GREATEST(at.fitment_completed_at, at.hoist_completed_at)
+          WHEN st.has_fitment THEN at.fitment_completed_at
+          WHEN st.has_hoist THEN at.hoist_completed_at
+          ELSE NULL
+        END AS completed_at,
+        (NOT st.has_fitment OR at.fitment_completed_at IS NOT NULL)
+          AND (NOT st.has_hoist OR at.hoist_completed_at IS NOT NULL) AS is_completed,
+        st.std_minutes > 0
+          AND (NOT st.has_fitment OR COALESCE(at.fitment_valid_timing, FALSE))
+          AND (NOT st.has_hoist OR COALESCE(at.hoist_valid_timing, FALSE)) AS has_valid_timing
+      FROM base_models bm
+      JOIN standard_times st ON st.masterlist_id = bm.masterlist_id
+      LEFT JOIN actual_times at ON at.masterlist_id = bm.masterlist_id
+    ),
+    performance_summary AS (
+      SELECT
+        model,
+        COUNT(*)::int AS checked_out_qty,
+        COUNT(*) FILTER (WHERE fitment_type = 'V')::int AS v,
+        COUNT(*) FILTER (WHERE fitment_type = 'A')::int AS a,
+        COUNT(*) FILTER (WHERE fitment_type = 'J')::int AS j,
+        COUNT(*) FILTER (WHERE has_valid_timing)::int AS measured_qty,
+        COUNT(*) FILTER (WHERE has_valid_timing AND act_minutes <= std_minutes)::int AS within_std,
+        COUNT(*) FILTER (WHERE has_valid_timing AND act_minutes > std_minutes)::int AS over_std,
+        ROUND(COALESCE(AVG(std_minutes) FILTER (WHERE has_valid_timing), 0), 2) AS avg_std_time,
+        ROUND(COALESCE(AVG(act_minutes) FILTER (WHERE has_valid_timing), 0), 2) AS avg_time,
+        ROUND(COALESCE(SUM(std_minutes) FILTER (WHERE has_valid_timing), 0), 2) AS std_ct,
+        ROUND(COALESCE(SUM(act_minutes) FILTER (WHERE has_valid_timing), 0), 2) AS act_ct
+      FROM vehicle_rows
+      WHERE is_completed AND ${completionDateFilter}
+      GROUP BY model
     )
     SELECT
       model,
-      COUNT(*) FILTER (WHERE fitment_type IN ('V', 'A', 'J'))::int AS qty,
-      COUNT(*) FILTER (WHERE fitment_type = 'V')::int AS v,
-      COUNT(*) FILTER (WHERE fitment_type = 'A')::int AS a,
-      COUNT(*) FILTER (WHERE fitment_type = 'J')::int AS j
-    FROM daily_models
-    WHERE fitment_type IN ('V', 'A', 'J')
-    GROUP BY model
-    ORDER BY qty DESC, model ASC
+      checked_out_qty AS qty,
+      checked_out_qty,
+      v,
+      a,
+      j,
+      measured_qty AS completed_qty,
+      within_std,
+      over_std,
+      avg_std_time,
+      avg_time,
+      std_ct,
+      act_ct
+    FROM performance_summary
+    ORDER BY checked_out_qty DESC, model ASC
   `;
 
-  const result = await req.app.get('pool').query(query, [date]);
+  const values = isSingleDay ? [date] : [date, endDate];
+  const result = await req.app.get('pool').query(query, values);
   return result.rows;
 };
 

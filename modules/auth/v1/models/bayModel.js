@@ -427,8 +427,12 @@ const getBayPerformanceAnalytics = async (req, date, model) => {
       LEFT JOIN staff s ON s.no = cs.staff_id
       WHERE cs.checkin_id = c.no
     ) AS staff_summary ON TRUE
-    WHERE c.checkin_time IS NOT NULL
-      AND ($1::date IS NULL OR c.checkin_time::date = $1::date)
+    WHERE c.status = 'Check-Out'
+      AND c.checkin_time IS NOT NULL
+      AND c.checkout_time IS NOT NULL
+      AND c.checkout_time >= c.checkin_time
+      AND m.cancel_time IS NULL
+      AND ($1::date IS NULL OR c.checkout_time::date = $1::date)
       AND (
         $2::text IS NULL
         OR m.model_description ILIKE $2
@@ -521,6 +525,55 @@ const getBayPerformanceAnalytics = async (req, date, model) => {
   };
 };
 
+const getBayPerformanceSummary = async (req, startDate, endDate) => {
+  const query = `
+    WITH checked_out_tasks AS (
+      SELECT
+        b.no AS bay_id,
+        b.name AS bay_name,
+        TRIM(c.type) AS task_type,
+        COALESCE(task_summary.std_minutes, 0) AS std_minutes,
+        EXTRACT(EPOCH FROM (c.checkout_time - c.checkin_time)) / 60.0 AS act_minutes
+      FROM checkin c
+      INNER JOIN bay b ON b.no = c.bay_id
+      INNER JOIN masterlist m ON m.no = c.masterlist_id
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(t.duration), 0)::numeric AS std_minutes
+        FROM task_item t
+        WHERE t.masterlist_id = c.masterlist_id
+          AND TRIM(t.type) = TRIM(c.type)
+      ) AS task_summary ON TRUE
+      WHERE c.status = 'Check-Out'
+        AND TRIM(c.type) IN ('FITMENT', 'HOIST')
+        AND c.checkin_time IS NOT NULL
+        AND c.checkout_time IS NOT NULL
+        AND c.checkout_time >= c.checkin_time
+        AND m.cancel_time IS NULL
+        AND c.checkout_time >= $1::date
+        AND c.checkout_time < ($2::date + INTERVAL '1 day')
+    )
+    SELECT
+      bay_id,
+      bay_name,
+      COUNT(*)::int AS checked_out_tasks,
+      COUNT(*) FILTER (WHERE task_type = 'FITMENT')::int AS fitment,
+      COUNT(*) FILTER (WHERE task_type = 'HOIST')::int AS hoist,
+      COUNT(*) FILTER (WHERE std_minutes > 0)::int AS measured_tasks,
+      ROUND(SUM(std_minutes) FILTER (WHERE std_minutes > 0), 2) AS total_std_time,
+      ROUND((SUM(act_minutes) FILTER (WHERE std_minutes > 0))::numeric, 2) AS total_act_time,
+      ROUND(AVG(std_minutes) FILTER (WHERE std_minutes > 0), 2) AS avg_std_time,
+      ROUND((AVG(act_minutes) FILTER (WHERE std_minutes > 0))::numeric, 2) AS avg_act_time,
+      COUNT(*) FILTER (WHERE std_minutes > 0 AND act_minutes <= std_minutes)::int AS within_std,
+      COUNT(*) FILTER (WHERE std_minutes > 0 AND act_minutes > std_minutes)::int AS over_std
+    FROM checked_out_tasks
+    GROUP BY bay_id, bay_name
+    ORDER BY bay_name ASC
+  `;
+
+  const result = await req.app.get('pool').query(query, [startDate, endDate || startDate]);
+  return Array.isArray(result.rows) ? result.rows : [];
+};
+
 module.exports = {
   selectBayStaff,
   getBayCheckinListByStatus,
@@ -536,5 +589,6 @@ module.exports = {
   getBayCheckinList,
   getBayHistoryByDate,
   insertBayLog,
-  getBayPerformanceAnalytics
+  getBayPerformanceAnalytics,
+  getBayPerformanceSummary
 };

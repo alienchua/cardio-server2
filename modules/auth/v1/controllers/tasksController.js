@@ -851,14 +851,16 @@ const getLastOpenCafiDateCtrl = async (req, res, next) => {
 
 const getHourlyCompletedStatsCtrl = async (req, res, next) => {
   try {
-    const date = String(req.query?.date || new Date().toISOString().slice(0, 10)).trim();
-    if (!/^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.test(date)) {
+    const dateFrom = String(req.query?.date_from || req.query?.date || new Date().toISOString().slice(0, 10)).trim();
+    const dateTo = String(req.query?.date_to || req.query?.date || dateFrom).trim();
+    const datePattern = /^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/;
+    if (!datePattern.test(dateFrom) || !datePattern.test(dateTo) || dateFrom > dateTo) {
       return res.status(400).json({
         success: false,
-        message: 'Use date=YYYY-MM-DD'
+        message: 'Use date=YYYY-MM-DD or a valid date_from/date_to range'
       });
     }
-    const result = await getHourlyCompletedStats(req, date);
+    const result = await getHourlyCompletedStats(req, dateFrom, dateTo);
     res.status(200).json({
       success: true,
       message: "Get hourly completed stats successfully",
@@ -905,15 +907,17 @@ const getCompletedTaskSummaryCtrl = async (req, res, next) => {
 
 const getDailyVehicleModelSummaryCtrl = async (req, res, next) => {
   try {
-    const date = String(req.query?.date || '').trim();
-    if (!/^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.test(date)) {
+    const dateFrom = String(req.query?.date_from || req.query?.date || '').trim();
+    const dateTo = String(req.query?.date_to || req.query?.date || dateFrom).trim();
+    const datePattern = /^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/;
+    if (!datePattern.test(dateFrom) || !datePattern.test(dateTo) || dateFrom > dateTo) {
       return res.status(400).json({
         success: false,
-        message: 'Use date=YYYY-MM-DD'
+        message: 'Use date=YYYY-MM-DD or a valid date_from/date_to range'
       });
     }
 
-    const result = await getDailyVehicleModelSummary(req, date);
+    const result = await getDailyVehicleModelSummary(req, dateFrom, dateTo);
     res.status(200).json({
       success: true,
       message: 'Get daily vehicle model summary successfully',

@@ -49,7 +49,8 @@ const {
   runBayResetCtrl,
   getBayCheckinListCtrl,
   getBayHistoryCtrl,
-  getBayPerformanceCtrl } = require('../controllers/bayController');
+  getBayPerformanceCtrl,
+  getBayPerformanceSummaryCtrl } = require('../controllers/bayController');
 const { 
   createInstallment,
   getInstallmentCtrl ,
@@ -263,6 +264,7 @@ router.post('/inactiveMasterCtrl', inactiveMasterCtrl);
 router.get('/getBayCheckinListCtrl', getBayCheckinListCtrl);
 router.post('/getBayHistoryCtrl', getBayHistoryCtrl);
 router.post('/getBayPerformanceCtrl', getBayPerformanceCtrl);
+router.get('/getBayPerformanceSummaryCtrl', getBayPerformanceSummaryCtrl);
 router.post('/manualCheckin', manualCheckin);
 router.post('/addCheckinStaffCtrl', addCheckinStaffCtrl);
 
