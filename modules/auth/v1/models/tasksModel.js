@@ -747,8 +747,10 @@ const insertCheckInStaffBatch = async (req, checkin_id, staff_ids = []) => {
   if (filtered.length === 0) return [];
 
   const query = `
-    INSERT INTO checkin_staff (checkin_id, staff_id)
-    SELECT $1, unnest($2::int[])
+    INSERT INTO checkin_staff (checkin_id, staff_id, position)
+    SELECT $1, s.no, s.type
+    FROM staff s
+    WHERE s.no = ANY($2::int[])
     RETURNING *
   `;
 
