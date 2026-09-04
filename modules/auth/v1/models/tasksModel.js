@@ -747,8 +747,10 @@ const insertCheckInStaffBatch = async (req, checkin_id, staff_ids = []) => {
   if (filtered.length === 0) return [];
 
   const query = `
-    INSERT INTO checkin_staff (checkin_id, staff_id)
-    SELECT $1, unnest($2::int[])
+    INSERT INTO checkin_staff (checkin_id, staff_id, position)
+    SELECT $1, s.no, s.type
+    FROM staff s
+    WHERE s.no = ANY($2::int[])
     RETURNING *
   `;
 
@@ -1976,7 +1978,7 @@ const getAchievementAnalysis = async (req, data) => {
   return result.rows[0] || { completed: 0, pending: 0, ongoing: 0 };
 };
 
-const getHourlyCompletedStats = async (req) => {
+const getHourlyCompletedStats = async (req, date) => {
   const baseCte = `
     WITH base AS (
       SELECT
@@ -1994,7 +1996,7 @@ const getHourlyCompletedStats = async (req) => {
       LEFT JOIN task_item t
         ON t.masterlist_id = m.no
         AND t.type IN ('FITMENT', 'HOIST')
-      WHERE c.checkin_time::date = CURRENT_DATE
+      WHERE c.checkin_time::date = $1::date
       GROUP BY m.no
     )
   `;
@@ -2007,7 +2009,7 @@ const getHourlyCompletedStats = async (req) => {
     FROM base
     WHERE has_fitment = 1
       AND checkout_time_fitment IS NOT NULL
-      AND checkout_time_fitment::date = CURRENT_DATE
+      AND checkout_time_fitment::date = $1::date
     GROUP BY 1
     ORDER BY 1
   `;
@@ -2020,7 +2022,7 @@ const getHourlyCompletedStats = async (req) => {
     FROM base
     WHERE has_hoist = 1
       AND checkout_time_hoist IS NOT NULL
-      AND checkout_time_hoist::date = CURRENT_DATE
+      AND checkout_time_hoist::date = $1::date
     GROUP BY 1
     ORDER BY 1
   `;
@@ -2050,15 +2052,15 @@ const getHourlyCompletedStats = async (req) => {
           WHEN has_hoist = 1 THEN checkout_time_hoist
           ELSE NULL
         END
-      )::date = CURRENT_DATE
+      )::date = $1::date
     GROUP BY 1
     ORDER BY 1
   `;
 
   const [fitment, hoist, total] = await Promise.all([
-    req.app.get('pool').query(fitmentQuery),
-    req.app.get('pool').query(hoistQuery),
-    req.app.get('pool').query(totalQuery)
+    req.app.get('pool').query(fitmentQuery, [date]),
+    req.app.get('pool').query(hoistQuery, [date]),
+    req.app.get('pool').query(totalQuery, [date])
   ]);
 
   return {
@@ -2066,6 +2068,124 @@ const getHourlyCompletedStats = async (req) => {
     hoist: hoist.rows,
     total: total.rows
   };
+};
+
+const getCompletedTaskSummary = async (req, startDate, endDate) => {
+  const query = `
+    WITH expected AS (
+      SELECT
+        ti.masterlist_id,
+        UPPER(LEFT(TRIM(COALESCE(m.fitment_id, '')), 1)) AS fitment_type,
+        BOOL_OR(TRIM(ti.type) = 'FITMENT') AS has_fitment,
+        BOOL_OR(TRIM(ti.type) = 'HOIST') AS has_hoist
+      FROM task_item ti
+      JOIN masterlist m ON m.no = ti.masterlist_id
+      WHERE TRIM(ti.type) IN ('FITMENT', 'HOIST') AND m.cancel_time IS NULL
+      GROUP BY ti.masterlist_id, m.fitment_id
+    ),
+    completed AS (
+      SELECT
+        masterlist_id,
+        MAX(checkout_time) FILTER (WHERE TRIM(type) = 'FITMENT' AND status = 'Check-Out') AS fitment_completed_at,
+        MAX(checkout_time) FILTER (WHERE TRIM(type) = 'HOIST' AND status = 'Check-Out') AS hoist_completed_at
+      FROM checkin
+      WHERE TRIM(type) IN ('FITMENT', 'HOIST')
+      GROUP BY masterlist_id
+    ),
+    task_completion AS (
+      SELECT
+        e.*,
+        c.fitment_completed_at,
+        c.hoist_completed_at,
+        CASE
+          WHEN e.has_fitment AND e.has_hoist THEN GREATEST(c.fitment_completed_at, c.hoist_completed_at)
+          WHEN e.has_fitment THEN c.fitment_completed_at
+          WHEN e.has_hoist THEN c.hoist_completed_at
+          ELSE NULL
+        END AS completed_at
+      FROM expected e
+      LEFT JOIN completed c ON c.masterlist_id = e.masterlist_id
+    ),
+    completion_flags AS (
+      SELECT
+        *,
+        has_fitment
+          AND fitment_completed_at >= $1::date
+          AND fitment_completed_at < $2::date AS fitment_in_range,
+        has_hoist
+          AND hoist_completed_at >= $1::date
+          AND hoist_completed_at < $2::date AS hoist_in_range,
+        (NOT has_fitment OR fitment_completed_at IS NOT NULL)
+          AND (NOT has_hoist OR hoist_completed_at IS NOT NULL)
+          AND completed_at >= $1::date
+          AND completed_at < $2::date AS total_in_range
+      FROM task_completion
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE fitment_in_range)::int AS fitment,
+      COUNT(*) FILTER (WHERE hoist_in_range)::int AS hoist,
+      COUNT(*) FILTER (WHERE total_in_range)::int AS total,
+      JSON_BUILD_OBJECT(
+        'V', JSON_BUILD_OBJECT(
+          'fitment', COUNT(*) FILTER (WHERE fitment_type = 'V' AND fitment_in_range)::int,
+          'hoist', COUNT(*) FILTER (WHERE fitment_type = 'V' AND hoist_in_range)::int,
+          'total', COUNT(*) FILTER (WHERE fitment_type = 'V' AND total_in_range)::int
+        ),
+        'J', JSON_BUILD_OBJECT(
+          'fitment', COUNT(*) FILTER (WHERE fitment_type = 'J' AND fitment_in_range)::int,
+          'hoist', COUNT(*) FILTER (WHERE fitment_type = 'J' AND hoist_in_range)::int,
+          'total', COUNT(*) FILTER (WHERE fitment_type = 'J' AND total_in_range)::int
+        ),
+        'A', JSON_BUILD_OBJECT(
+          'fitment', COUNT(*) FILTER (WHERE fitment_type = 'A' AND fitment_in_range)::int,
+          'hoist', COUNT(*) FILTER (WHERE fitment_type = 'A' AND hoist_in_range)::int,
+          'total', COUNT(*) FILTER (WHERE fitment_type = 'A' AND total_in_range)::int
+        )
+      ) AS by_fitment_type
+    FROM completion_flags
+  `;
+
+  const result = await req.app.get('pool').query(query, [startDate, endDate]);
+  return result.rows[0] || {
+    fitment: 0,
+    hoist: 0,
+    total: 0,
+    by_fitment_type: {
+      V: { fitment: 0, hoist: 0, total: 0 },
+      J: { fitment: 0, hoist: 0, total: 0 },
+      A: { fitment: 0, hoist: 0, total: 0 }
+    }
+  };
+};
+
+const getDailyVehicleModelSummary = async (req, date) => {
+  const query = `
+    WITH daily_models AS (
+      SELECT
+        COALESCE(
+          NULLIF(TRIM(model_description), ''),
+          NULLIF(TRIM(model_code), ''),
+          'Unknown Model'
+        ) AS model,
+        UPPER(LEFT(TRIM(COALESCE(fitment_id, '')), 1)) AS fitment_type
+      FROM masterlist
+      WHERE cafi_date = $1::date
+        AND cancel_time IS NULL
+    )
+    SELECT
+      model,
+      COUNT(*) FILTER (WHERE fitment_type IN ('V', 'A', 'J'))::int AS qty,
+      COUNT(*) FILTER (WHERE fitment_type = 'V')::int AS v,
+      COUNT(*) FILTER (WHERE fitment_type = 'A')::int AS a,
+      COUNT(*) FILTER (WHERE fitment_type = 'J')::int AS j
+    FROM daily_models
+    WHERE fitment_type IN ('V', 'A', 'J')
+    GROUP BY model
+    ORDER BY qty DESC, model ASC
+  `;
+
+  const result = await req.app.get('pool').query(query, [date]);
+  return result.rows;
 };
 
 
@@ -3359,6 +3479,8 @@ module.exports = {
   getAchievementList,
   getAchievementAnalysis,
   getHourlyCompletedStats,
+  getCompletedTaskSummary,
+  getDailyVehicleModelSummary,
   getFitmentCurrentCheckin,
   updateReady,
   updateCheckingTime,
