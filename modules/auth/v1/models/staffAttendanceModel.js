@@ -37,7 +37,9 @@ const resolveStaffNo = async (client, staffId) => {
 };
 
 const upsertAttendance = async (req, rows = []) => {
-  if (!Array.isArray(rows) || rows.length === 0) return [];
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { imported: [], errors: [] };
+  }
 
   const pool = req.app.get('pool');
   const attendanceBreakdownColumns = ['late', 'mc', 'hl', 'q', 'al', 'el', 'ul', 'cl'];
@@ -69,16 +71,23 @@ const upsertAttendance = async (req, rows = []) => {
   `);
 
   const client = await pool.connect();
-  const results = [];
+  const imported = [];
+  const errors = [];
 
   try {
     await client.query('BEGIN');
 
-    for (const r of rows) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const r = rows[index];
       const staff = await resolveStaffNo(client, r.staff_id);
 
       if (!staff) {
-        throw new Error(`Staff ID ${r.staff_id} not found`);
+        errors.push({
+          row: r.source_row ?? index + 2,
+          staff_id: r.staff_id,
+          message: 'Staff not found'
+        });
+        continue;
       }
 
       const result = await client.query(
@@ -117,7 +126,7 @@ const upsertAttendance = async (req, rows = []) => {
         ]
       );
 
-      results.push({
+      imported.push({
         ...result.rows[0],
         input_staff_id: r.staff_id,
         matched_staff_id: staff.staff_id
@@ -125,7 +134,7 @@ const upsertAttendance = async (req, rows = []) => {
     }
 
     await client.query('COMMIT');
-    return results;
+    return { imported, errors };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

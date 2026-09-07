@@ -186,6 +186,7 @@ const uploadStaffAttendance = async (req, res, next) => {
 
     const normalized = records.map((r) => ({
       staff_id: r.staff_id || r.id,
+      source_row: r.source_row,
       month_label: r.month_label || r.month || month,
       attendance: numericValue(r.attendance ?? r.attandence),
       absent: numericValue(r.absent ?? r.absence),
@@ -210,8 +211,15 @@ const uploadStaffAttendance = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      message: 'Attendance uploaded',
-      data: result
+      message: result.errors.length > 0
+        ? 'Attendance uploaded with skipped rows'
+        : 'Attendance uploaded',
+      data: {
+        imported_count: result.imported.length,
+        error_count: result.errors.length,
+        imported: result.imported,
+        errors: result.errors
+      }
     });
   } catch (error) {
     next(error);

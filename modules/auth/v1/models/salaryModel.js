@@ -8,7 +8,7 @@ const DEFAULT_BASE_PAY_RULES = [
   { min_days: 16, amount: 1500 }
 ];
 
-const ADJUSTMENT_TYPES = ['Port', 'Deduct', 'Cash Adv', 'Released', 'Adj 1', 'Defect', 'Part&Tools'];
+const ADJUSTMENT_TYPES = ['Port', 'Deduct', 'Cash Adv', 'Deposit', 'Released', 'Adj 1', 'Defect', 'Part&Tools'];
 
 const insertInstallment = async (req , staff_id , amount , installment , remark ) => {
 
@@ -1008,6 +1008,7 @@ const getSalaryAdjustmentsForMonth = async (req, month, staffNo = null) => {
         port_fitment: 0,
         incentive_deduction: 0,
         cash_advance_second: 0,
+        deposit: 0,
         deposit_release: 0,
         incentive_addition: 0,
         defect_part_tools: 0,
@@ -1020,6 +1021,7 @@ const getSalaryAdjustmentsForMonth = async (req, month, staffNo = null) => {
     if (row.adjustment_type === 'Port') grouped[staffId].port_fitment += amount;
     if (row.adjustment_type === 'Deduct') grouped[staffId].incentive_deduction += absAmount;
     if (row.adjustment_type === 'Cash Adv') grouped[staffId].cash_advance_second += absAmount;
+    if (row.adjustment_type === 'Deposit') grouped[staffId].deposit += absAmount;
     if (row.adjustment_type === 'Released') grouped[staffId].deposit_release += amount;
     if (row.adjustment_type === 'Adj 1' && amount >= 0) grouped[staffId].incentive_addition += amount;
     if (row.adjustment_type === 'Adj 1' && amount < 0) grouped[staffId].incentive_deduction += absAmount;

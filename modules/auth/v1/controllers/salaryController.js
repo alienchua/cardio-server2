@@ -223,6 +223,7 @@ const combineFinanceAndAdjustments = (finance = {}, adjustment = {}) => ({
   defect_part_tools: asMoney(finance.defect_part_tools) + asMoney(adjustment.defect_part_tools),
   incentive_deduction: asMoney(finance.incentive_deduction) + asMoney(adjustment.incentive_deduction),
   cash_advance_second: asMoney(finance.cash_advance_second) + asMoney(adjustment.cash_advance_second),
+  deposit: asMoney(finance.deposit) + asMoney(adjustment.deposit),
   port_fitment: asMoney(finance.port_fitment) + asMoney(adjustment.port_fitment),
   incentive_addition: asMoney(finance.incentive_addition) + asMoney(adjustment.incentive_addition),
   deposit_release: asMoney(finance.deposit_release) + asMoney(adjustment.deposit_release)

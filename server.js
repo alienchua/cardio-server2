@@ -115,7 +115,6 @@ app.use(
 );
 
 app.use(responseFormatter);
-app.use(errorHandler);
 
 
 
@@ -125,6 +124,7 @@ app.use('/realtime', websocketRoutes); // Add this line
 
 
 setupSwagger(app);
+app.use(errorHandler);
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   logger.log(i18next.t('Please login', { what: 'i18next', how: 'not great', lng: 'de' }), 'info')

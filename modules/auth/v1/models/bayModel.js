@@ -390,7 +390,7 @@ const insertBayLog = async (req, { remark, staff_id, bay_id, action_by = 4 }) =>
   return result.rows[0];
 };
 
-const getBayPerformanceAnalytics = async (req, date, model) => {
+const getBayPerformanceAnalytics = async (req, date, model, dateTo = null, bayName = null, dateField = 'checkout') => {
   const query = `
     SELECT
       b.name AS bay_name,
@@ -405,7 +405,12 @@ const getBayPerformanceAnalytics = async (req, date, model) => {
       m.chassis,
       m.model_code,
       m.model_description,
+      m.colour,
+      m.accessories_otp,
+      m.cafi_date AS fitment_date,
+      SUBSTRING(m.fitment_id FROM 1 FOR 1) AS fitment_type,
       COALESCE(task_summary.estimated_cycle_time, 0) AS estimated_cycle_time,
+      COALESCE(task_summary.accessory_names, '') AS accessory_names,
       CASE
         WHEN c.checkin_time IS NOT NULL AND c.checkout_time IS NOT NULL
         THEN ROUND(EXTRACT(EPOCH FROM (c.checkout_time - c.checkin_time)) / 60.0, 2)
@@ -416,7 +421,12 @@ const getBayPerformanceAnalytics = async (req, date, model) => {
     LEFT JOIN bay b ON b.no = c.bay_id
     LEFT JOIN masterlist m ON m.no = c.masterlist_id
     LEFT JOIN LATERAL (
-      SELECT COALESCE(SUM(t.duration), 0) AS estimated_cycle_time
+      SELECT
+        COALESCE(SUM(t.duration), 0) AS estimated_cycle_time,
+        STRING_AGG(
+          DISTINCT NULLIF(TRIM(t.short_name), ''),
+          ', ' ORDER BY NULLIF(TRIM(t.short_name), '')
+        ) AS accessory_names
       FROM task_item t
       WHERE t.masterlist_id = c.masterlist_id
         AND t.type = c.type
@@ -432,18 +442,36 @@ const getBayPerformanceAnalytics = async (req, date, model) => {
       AND c.checkout_time IS NOT NULL
       AND c.checkout_time >= c.checkin_time
       AND m.cancel_time IS NULL
-      AND ($1::date IS NULL OR c.checkout_time::date = $1::date)
+      AND (
+        $1::date IS NULL
+        OR (
+          (
+            $5::text = 'fitment'
+            AND m.cafi_date >= $1::date
+            AND m.cafi_date < (COALESCE($3::date, $1::date) + INTERVAL '1 day')
+          )
+          OR (
+            $5::text <> 'fitment'
+            AND c.checkout_time >= $1::date
+            AND c.checkout_time < (COALESCE($3::date, $1::date) + INTERVAL '1 day')
+          )
+        )
+      )
+      AND ($4::text IS NULL OR b.name = $4)
       AND (
         $2::text IS NULL
         OR m.model_description ILIKE $2
         OR m.model_code ILIKE $2
       )
-    ORDER BY b.name ASC, c.checkin_time ASC, c.no ASC
+    ORDER BY b.name ASC, c.checkout_time ASC, c.no ASC
   `;
 
   const values = [
     date || null,
-    model ? `%${model}%` : null
+    model ? `%${model}%` : null,
+    dateTo || date || null,
+    bayName || null,
+    dateField === 'fitment' ? 'fitment' : 'checkout'
   ];
 
   const result = await req.app.get('pool').query(query, values);
@@ -501,6 +529,11 @@ const getBayPerformanceAnalytics = async (req, date, model) => {
       chassis: row.chassis,
       model_code: row.model_code,
       model_description: modelDescription,
+      colour: row.colour,
+      accessories_otp: row.accessories_otp,
+      fitment_date: row.fitment_date,
+      accessory_names: row.accessory_names,
+      fitment_type: row.fitment_type,
       type: row.type,
       status: row.status,
       checkin_time: row.checkin_time,

@@ -48,11 +48,16 @@ test('bay dashboard summary groups valid task Check-Outs by bay over an inclusiv
 
 test('detailed bay performance uses the same completed and non-cancelled checkout scope', async () => {
   const calls = [];
-  await getBayPerformanceAnalytics(createRequest(calls), '2026-09-04', null);
+  await getBayPerformanceAnalytics(createRequest(calls), '2026-09-04', null, '2026-09-06', 'A1', 'fitment');
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].values, ['2026-09-04', null]);
+  assert.deepEqual(calls[0].values, ['2026-09-04', null, '2026-09-06', 'A1', 'fitment']);
   assert.match(calls[0].query, /c\.status = 'Check-Out'/);
-  assert.match(calls[0].query, /c\.checkout_time::date = \$1::date/);
+  assert.match(calls[0].query, /c\.checkout_time >= \$1::date/);
+  assert.match(calls[0].query, /COALESCE\(\$3::date, \$1::date\)/);
+  assert.match(calls[0].query, /b\.name = \$4/);
+  assert.match(calls[0].query, /m\.cafi_date >= \$1::date/);
   assert.match(calls[0].query, /m\.cancel_time IS NULL/);
+  assert.match(calls[0].query, /m\.accessories_otp/);
+  assert.match(calls[0].query, /AS accessory_names/);
 });

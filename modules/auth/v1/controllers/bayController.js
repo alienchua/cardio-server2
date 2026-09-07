@@ -68,10 +68,16 @@ const getBayHistoryCtrl = async (req, res, next) => {
 };
 
 const getBayPerformanceCtrl = async (req, res, next) => {
-  const { date, model } = req.body;
+  const { date, date_from, date_to, date_field, model, bay_name } = req.body;
+  const startDate = date_from || date;
+  const endDate = date_to || startDate;
+
+  if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
+    return res.status(400).json({ success: false, message: 'date_to must be on or after date_from' });
+  }
 
   try {
-    const result = await getBayPerformanceAnalytics(req, date, model);
+    const result = await getBayPerformanceAnalytics(req, startDate, model, endDate, bay_name, date_field);
 
     res.status(200).json({
       success: true,
