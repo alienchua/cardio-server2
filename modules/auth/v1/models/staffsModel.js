@@ -3,7 +3,8 @@ require('dotenv').config();
 const ensureStaffColumns = async (req) => {
   await req.app.get('pool').query(`
     ALTER TABLE staff
-    ADD COLUMN IF NOT EXISTS confirmed_date DATE
+    ADD COLUMN IF NOT EXISTS confirmed_date DATE,
+    ADD COLUMN IF NOT EXISTS hide_staff BOOLEAN NOT NULL DEFAULT FALSE
   `);
 };
 
@@ -95,7 +96,10 @@ const updateStaffBystaff_id = async (req, payload = {}) => {
     confirmed_date: payload.confirmed_date,
     resign_date: payload.resign_date,
     photo: payload.photo,
-    gender: payload.gender
+    gender: payload.gender,
+    hide_staff: payload.hide_staff === undefined
+      ? undefined
+      : payload.hide_staff === true || payload.hide_staff === 1 || payload.hide_staff === 'true' || payload.hide_staff === '1'
   };
 
   const entries = Object.entries(updatable).filter(([, value]) => value !== undefined);
