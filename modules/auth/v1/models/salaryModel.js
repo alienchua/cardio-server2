@@ -472,6 +472,7 @@ const ensureSalaryFinanceTables = async (req) => {
         month VARCHAR(7) NOT NULL,
         staff_no BIGINT NOT NULL,
         staff_id VARCHAR(50),
+        cv_no VARCHAR(100),
         epf_11 NUMERIC(12,2) DEFAULT 0,
         epf_13 NUMERIC(12,2) DEFAULT 0,
         cash_advance_first NUMERIC(12,2) DEFAULT 0,
@@ -495,6 +496,7 @@ const ensureSalaryFinanceTables = async (req) => {
 
     await client.query(`
       ALTER TABLE salary_finance_inputs
+      ADD COLUMN IF NOT EXISTS cv_no VARCHAR(100),
       ADD COLUMN IF NOT EXISTS socso_employer NUMERIC(12,2) DEFAULT 0,
       ADD COLUMN IF NOT EXISTS sip_employer NUMERIC(12,2) DEFAULT 0
     `);
@@ -1470,6 +1472,7 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
         month,
         staff.no,
         staff.staff_id,
+        String(input.cv_no ?? '').trim().slice(0, 100),
         money(input.epf_11),
         money(input.epf_13),
         money(input.cash_advance_first),
@@ -1491,14 +1494,15 @@ const upsertSalaryFinanceInputs = async (req, month, rows = []) => {
       const result = await client.query(
         `
           INSERT INTO salary_finance_inputs (
-            month, staff_no, staff_id, epf_11, epf_13, cash_advance_first, cash_advance_second,
+            month, staff_no, staff_id, cv_no, epf_11, epf_13, cash_advance_first, cash_advance_second,
             socso, socso_employer, sip, sip_employer, pcb, defect_part_tools, attendance_absenteeism, incentive_deduction,
             incentive_addition, deposit, deposit_release, finance_remarks, imported_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
           ON CONFLICT (month, staff_no)
           DO UPDATE SET
             staff_id = EXCLUDED.staff_id,
+            cv_no = EXCLUDED.cv_no,
             epf_11 = EXCLUDED.epf_11,
             epf_13 = EXCLUDED.epf_13,
             cash_advance_first = EXCLUDED.cash_advance_first,

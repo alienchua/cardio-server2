@@ -6,7 +6,7 @@ const clientId = 'senderClient';
 const topic = 'testTopic';
 
 // Subscribe to a topic using the API
-axios.post('http://localhost:3000/api/v1/subscribe', {
+axios.post('http://localhost:3001/api/v1/subscribe', {
   clientId:clientId,
   topic:topic,
 })
@@ -14,7 +14,7 @@ axios.post('http://localhost:3000/api/v1/subscribe', {
   console.log(response.data.message);
 
   // Connect to the WebSocket server
-  const ws = new WebSocket('ws://localhost:3000/ws');
+  const ws = new WebSocket('ws://localhost:3001/ws');
 
   ws.on('open', function open() {
     console.log('WebSocket connected');

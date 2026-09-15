@@ -17,6 +17,13 @@ test('salary finance schema persists employer SOCSO and SIP/EIS contributions', 
   assert.match(ensureTables, /ADD COLUMN IF NOT EXISTS sip_employer/);
 });
 
+test('salary finance schema persists the imported CV number as text', () => {
+  const ensureTables = source.match(/const ensureSalaryFinanceTables[\s\S]*?const monthIndex/)?.[0] || '';
+
+  assert.match(ensureTables, /cv_no VARCHAR\(100\)/);
+  assert.match(ensureTables, /ADD COLUMN IF NOT EXISTS cv_no VARCHAR\(100\)/);
+});
+
 test('salary finance upsert inserts and updates both employer contributions', () => {
   const upsert = source.match(/const upsertSalaryFinanceInputs[\s\S]*?const insertSettlement/)?.[0] || '';
 
@@ -25,4 +32,12 @@ test('salary finance upsert inserts and updates both employer contributions', ()
   assert.match(upsert, /socso, socso_employer, sip, sip_employer, pcb/);
   assert.match(upsert, /socso_employer = EXCLUDED\.socso_employer/);
   assert.match(upsert, /sip_employer = EXCLUDED\.sip_employer/);
+});
+
+test('salary finance upsert inserts and updates CV NO without converting it to money', () => {
+  const upsert = source.match(/const upsertSalaryFinanceInputs[\s\S]*?const insertSettlement/)?.[0] || '';
+
+  assert.match(upsert, /String\(input\.cv_no \?\? ''\)\.trim\(\)\.slice\(0, 100\)/);
+  assert.match(upsert, /month, staff_no, staff_id, cv_no, epf_11/);
+  assert.match(upsert, /cv_no = EXCLUDED\.cv_no/);
 });
