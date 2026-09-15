@@ -5,7 +5,7 @@ const clientId = Math.random().toString()
 
 const dotenv = require('dotenv');
 dotenv.config();
-const ws = new WebSocket('ws://localhost:3000/realtime/ws',
+const ws = new WebSocket('ws://localhost:3001/realtime/ws',
   {
     headers: {
       Authorization: `Bearer ${process.env.ADMIN_TOKEN }`
