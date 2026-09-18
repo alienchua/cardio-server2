@@ -139,10 +139,19 @@ const {
   getSpecialCarModelsCtrl,
   updateSpecialCarSettingsCtrl
 } = require('../controllers/settingsController');
+const {
+  dashboard: getQgDashboard,
+  scan: resolveQgScan,
+  detail: getQgJobDetail,
+  issues: getQgDefectIssues,
+  submit: submitQgInspection,
+  inspections: getQgInspections
+} = require('../controllers/qgController');
   
 const auth = require('../../../../middlewares/auth');
 const errorFormatter = require('../../../../middlewares/errorFormatter');
 const roleMiddleware = require('../../../../middlewares/roleMiddleware');
+const requireAnyRole = require('../../../../middlewares/requireAnyRole');
 const sanitizeInputs = require('../../../../middlewares/sanitize');
 const responseFormatter = require('../../../../middlewares/responseFormatter');
 const router = express.Router();
@@ -170,15 +179,23 @@ router.post('/adminLogin', sanitizeInputs, loginValidation, errorFormatter, admi
 router.post('/refresh-token', errorFormatter, refreshAccessToken);
 router.post('/logout', auth, logout);
 router.get('/admin/me', auth, getCurrentAdmin);
+
+// Quality Gate mobile and admin reporting
+router.get('/qg/dashboard', auth, requireAnyRole('qg', 'manager', 'supervisor', 'admin', 'superadmin'), getQgDashboard);
+router.post('/qg/resolve-scan', auth, requireAnyRole('qg'), resolveQgScan);
+router.get('/qg/jobs/:jobId', auth, requireAnyRole('qg'), getQgJobDetail);
+router.get('/qg/defect-issues', auth, requireAnyRole('qg', 'admin', 'superadmin'), getQgDefectIssues);
+router.post('/qg/jobs/:jobId/inspections', auth, requireAnyRole('qg'), submitQgInspection);
+router.get('/qg/inspections', auth, requireAnyRole('qg', 'manager', 'supervisor', 'admin', 'superadmin'), getQgInspections);
 router.post('/add-to-blacklist', sanitizeInputs, [
   body('token').exists().withMessage('Token is required')
 ], errorFormatter, addToBlacklist);
 router.get('/dashboard', auth,  roleMiddleware('admin'),errorFormatter,responseFormatter, dashboard);
 router.post('/getUser', getUser);
-router.post('/createAdmin', createAdmin);
-router.get('/getAdminWithId/:id', getAdminWithId);
-router.post('/updateAdmin', auth, updateAdminById);
-router.get('/getAddAdmin', getAddAdmin);
+router.post('/createAdmin', auth, requireAnyRole('admin', 'superadmin'), createAdmin);
+router.get('/getAdminWithId/:id', auth, requireAnyRole('admin', 'superadmin'), getAdminWithId);
+router.post('/updateAdmin', auth, requireAnyRole('admin', 'superadmin'), updateAdminById);
+router.get('/getAddAdmin', auth, requireAnyRole('admin', 'superadmin'), getAddAdmin);
 
 // staffs
 router.post('/insertStaffs', insertStaffs);

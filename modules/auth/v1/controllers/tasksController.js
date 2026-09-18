@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { syncEligibleQgJobs } = require('../models/qgModel');
 
 const {
   insertMasterlist,
@@ -571,6 +572,14 @@ const checkOutTask = async (req, res, next) => {
   try {
 
     const result = await updateCheckIn(req,  masterlist_id  , type );
+
+    // QG is a downstream workflow. A migration can be rolled out independently,
+    // so a missing QG table must never block an existing Cardio checkout.
+    try {
+      await syncEligibleQgJobs(req.app.get('pool'));
+    } catch (qgError) {
+      console.warn('[QG] Could not synchronize ready jobs after checkout:', qgError.message);
+    }
 
     res.status(200).json({
       success: true,
