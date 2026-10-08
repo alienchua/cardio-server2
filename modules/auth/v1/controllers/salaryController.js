@@ -83,6 +83,19 @@ const getSalaryResultByMonth = async (req, res, next) => {
   const { month, date_from, date_to } = req.body;
 
   try {
+    if (date_from || date_to) {
+      const validDate = (value) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
+        const date = new Date(`${value}T00:00:00Z`);
+        return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+      };
+      if (!validDate(date_from) || !validDate(date_to) || date_from > date_to) {
+        return res.status(400).json({
+          success: false,
+          message: 'Choose a valid date range with an end date on or after the start date.'
+        });
+      }
+    }
     const result = await getSalaryResult(req, month, {
       dateFrom: date_from || null,
       dateTo: date_to || null

@@ -61,3 +61,21 @@ test('detailed bay performance uses the same completed and non-cancelled checkou
   assert.match(calls[0].query, /m\.accessories_otp/);
   assert.match(calls[0].query, /AS accessory_names/);
 });
+
+test('history-scoped performance keeps every bay task checked in on the selected date', async () => {
+  const calls = [];
+  const rows = [
+    { bay_name: 'A1', checkin_id: 11, status: 'Check-Out', model_description: 'Model A', actual_cycle_time: 35, estimated_cycle_time: 40 },
+    { bay_name: 'A1', checkin_id: 12, status: 'Check-In', model_description: 'Model A', actual_cycle_time: null, estimated_cycle_time: 40 }
+  ];
+  const result = await getBayPerformanceAnalytics(createRequest(calls, rows), '2026-09-04', null, null, 'A1', 'history');
+
+  assert.deepEqual(calls[0].values, ['2026-09-04', null, '2026-09-04', 'A1', 'history']);
+  assert.match(calls[0].query, /\$5::text = 'history'/);
+  assert.match(calls[0].query, /c\.checkin_time::date >= \$1::date/);
+  assert.match(calls[0].query, /c\.checkin_time::date <= COALESCE\(\$3::date, \$1::date\)/);
+  assert.match(calls[0].query, /m\.cancel_time IS NULL/);
+  assert.deepEqual(result.details.A1.map((row) => row.checkin_id), [11, 12]);
+  assert.equal(result.summary[0].total_tasks, 2);
+  assert.equal(result.details.A1[1].actual_cycle_time, null);
+});

@@ -1,6 +1,8 @@
+const { malaysiaDate, malaysiaTimestamp } = require('../../../../utils/malaysiaTime');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { syncEligibleQgJobs } = require('../models/qgModel');
+const { getTaskInspectionSummaries, getTaskInspectionDetails } = require('../models/taskInspectionModel');
 
 const {
   insertMasterlist,
@@ -107,6 +109,15 @@ const {
 const { broadcastToTopic, broadcastToTopics } = require('../../../realtime/v1/config/websocketConfig');
 
 require('dotenv').config();
+
+const syncQgAfterCheckin = async (req, masterlistId) => {
+  try {
+    await syncEligibleQgJobs(req.app.get('pool'), masterlistId);
+  } catch (error) {
+    // Cardio check-in must still succeed if the QG migration is not deployed yet.
+    console.warn('[QG] Could not synchronize jobs after check-in:', error.message);
+  }
+};
 
 const normalizeImportKey = (value) => String(value || '').trim().toLowerCase();
 const normalizeDisplayValue = (value) => String(value || '').trim();
@@ -548,6 +559,8 @@ const checkInTask = async (req, res, next) => {
       await insertCheckInStaff(req, result.no, staff.staff_id , staff.type);
     }
 
+    await syncQgAfterCheckin(req, result.masterlist_id);
+
     res.status(200).json({
       success: true,
       message: "Check In successfully",
@@ -572,14 +585,11 @@ const checkOutTask = async (req, res, next) => {
   try {
 
     const result = await updateCheckIn(req,  masterlist_id  , type );
-
-    // QG is a downstream workflow. A migration can be rolled out independently,
-    // so a missing QG table must never block an existing Cardio checkout.
-    try {
-      await syncEligibleQgJobs(req.app.get('pool'));
-    } catch (qgError) {
-      console.warn('[QG] Could not synchronize ready jobs after checkout:', qgError.message);
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Check-in task not found' });
     }
+
+    await syncQgAfterCheckin(req, result.masterlist_id);
 
     res.status(200).json({
       success: true,
@@ -649,6 +659,8 @@ const manualCheckin = async (req, res, next) => {
       for (const staffRow of staffRows) {
         await insertCheckInStaff(req, checkin.no, staffRow.no, staffRow.type || null);
       }
+
+      await syncQgAfterCheckin(req, master.no);
 
       results.push({
         bay: bayRow.name,
@@ -736,7 +748,7 @@ const getTasksListCtrl2 = async (req, res, next) => {
   const {  chassis , fitment_id , fitment_type, model , seq , bay, staff_id, backlog_only, date_from  ,date_to  , type, date_field, page, page_size } = req.body;
 
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = malaysiaDate();
     const pageNum = Math.max(1, Number(page) || 1);
     const pageSizeNum = Math.max(1, Math.min(Number(page_size) || 50, 200));
     const offset = (pageNum - 1) * pageSizeNum;
@@ -758,9 +770,10 @@ const getTasksListCtrl2 = async (req, res, next) => {
     }
 
     const isCancelledTab = String(type || '').toUpperCase() === 'CANCELLED';
-    const result = isCancelledTab
+    const taskRows = isCancelledTab
       ? await getCancelledCheckinList(req, data)
       : await getTasksList2(req , data);
+    const result = isCancelledTab ? taskRows : await getTaskInspectionSummaries(req, taskRows);
     const analysis = isCancelledTab ? [] : await getTasksAnalisys2(req , data)
 
     res.status(200).json({
@@ -781,7 +794,7 @@ const getAchievementListCtrl = async (req, res, next) => {
     date_from, date_to, date_field, bay, page, page_size } = req.body;
 
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = malaysiaDate();
     const pageNum = Math.max(1, Number(page) || 1);
     const pageSizeNum = Math.max(1, Math.min(Number(page_size) || 10000, 20000));
     const offset = (pageNum - 1) * pageSizeNum;
@@ -860,7 +873,7 @@ const getLastOpenCafiDateCtrl = async (req, res, next) => {
 
 const getHourlyCompletedStatsCtrl = async (req, res, next) => {
   try {
-    const dateFrom = String(req.query?.date_from || req.query?.date || new Date().toISOString().slice(0, 10)).trim();
+    const dateFrom = String(req.query?.date_from || req.query?.date || malaysiaDate()).trim();
     const dateTo = String(req.query?.date_to || req.query?.date || dateFrom).trim();
     const datePattern = /^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/;
     if (!datePattern.test(dateFrom) || !datePattern.test(dateTo) || dateFrom > dateTo) {
@@ -1316,6 +1329,8 @@ const updatecheckInTask = async (req, res, next) => {
       await insertCheckInStaff(req, result.no, staff.staff_id , staff.type);
     }
 
+    await syncQgAfterCheckin(req, result.masterlist_id);
+
     res.status(200).json({
       success: true,
       message: "Check In successfully",
@@ -1393,6 +1408,7 @@ const getTaskDetail = async (req, res, next) => {
     const masterData = await searchMasterlistByno(req , masterlist_no);
     const item = await getTaskbyNoandType(req , masterlist_no , type);
     const checkin = await getCheckinByNoandType(req , masterlist_no , type);
+    const inspections = await getTaskInspectionDetails(req, masterlist_no, type);
 
   
     res.status(200).json({
@@ -1400,7 +1416,8 @@ const getTaskDetail = async (req, res, next) => {
       message: "Check In successfully",
       masterData: masterData,
       item : item,
-      checkin : checkin
+      checkin : checkin,
+      inspections
     });
   } catch (error) {
     next(error);
@@ -1562,6 +1579,8 @@ const createTaskDirectCheckinCtrl = async (req, res, next) => {
       staff_ids: normalizedStaffIds
     });
 
+    await syncQgAfterCheckin(req, master.no);
+
     return res.status(200).json({
       success: true,
       message: 'Task checked in and checked out successfully',
@@ -1601,6 +1620,17 @@ const resetCheckinToStandbyCtrl = async (req, res, next) => {
     }
 
     const updated = await resetCheckinToStandby(req, checkin.checkin_id);
+
+    try {
+      await req.app.get('pool').query(`
+        DELETE FROM qg_job
+        WHERE source_checkin_id = $1
+          AND latest_inspection_id IS NULL
+          AND status IN ('PENDING', 'APPROVED')
+      `, [checkin.checkin_id]);
+    } catch (error) {
+      console.warn('[QG] Could not remove unsubmitted job after standby reset:', error.message);
+    }
 
     return res.status(200).json({
       success: true,
@@ -1810,6 +1840,8 @@ const standbytoCheckIn = async (req, res, next) => {
 
     const updatecheck = await updateCheckInNew(req, checkin_id, bay_id);
 
+    await syncQgAfterCheckin(req, updatecheck.masterlist_id);
+
     
     res.status(200).json({
       success: true,
@@ -1842,7 +1874,7 @@ const getPickCheckinCtrl = async (req, res, next) => {
 const getstandbyHistory = async (req, res, next) => {
   try {
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = malaysiaDate();
     const date_from = req.query.date_from || today;
     const date_to = req.query.date_to || req.query.date_from || today;
 
@@ -1874,7 +1906,7 @@ const cancelMasterlistRangeCtrl = async (req, res, next) => {
   }
 
   try {
-    const result = await cancelMasterlistByRange(req, date, seqFromNum, seqToNum, remark || null, new Date());
+    const result = await cancelMasterlistByRange(req, date, seqFromNum, seqToNum, remark || null, malaysiaTimestamp());
     res.status(200).json({
       success: true,
       message: 'Masterlist cancelled successfully',

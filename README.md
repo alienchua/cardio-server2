@@ -59,6 +59,7 @@ CREATE TABLE admins (
     email VARCHAR(100),
     phone VARCHAR(15),
     password VARCHAR(255),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     role VARCHAR(50) , 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -364,3 +365,7 @@ Please make sure to update tests as appropriate.
 
 ## License
 CodeBento 2024
+
+### Admin account status
+
+Before deploying the admin status feature, run `npm run migrate:admin-status` against the target database. Existing admins default to Active. The create/edit forms save `is_active`; inactive admins cannot log in, refresh tokens, or use authenticated HTTP endpoints. Admins cannot deactivate their own account.

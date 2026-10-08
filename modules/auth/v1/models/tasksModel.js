@@ -1,3 +1,4 @@
+const { malaysiaDate, malaysiaTimestamp, malaysiaInstant } = require('../../../../utils/malaysiaTime');
 require('dotenv').config();
 
 const getQueryRunner = (req, client) => client || req.app.get('pool');
@@ -68,7 +69,7 @@ const insertCheckIN = async (req, masterlist_id, action_by, bay_id, status, type
     VALUES ($1, $2, $3, $4, $5, 'Pending', $6, $6)
     RETURNING *
   `;
-  values = [masterlist_id, action_by, bay_id, 'Check-Out', type, new Date(),];
+  values = [masterlist_id, action_by, bay_id, 'Check-Out', type, malaysiaTimestamp(),];
 
   }
   else if (type === 'FITMENT') {
@@ -87,7 +88,7 @@ const insertCheckIN = async (req, masterlist_id, action_by, bay_id, status, type
       VALUES ($1, $2, $3, $4, $5, 'Pending', $6)
       RETURNING *
     `;
-    values = [masterlist_id, action_by, bay_id, status, type, new Date()];
+    values = [masterlist_id, action_by, bay_id, status, type, malaysiaTimestamp()];
 
   }
 
@@ -407,7 +408,7 @@ const cancelMasterlistForReplacement = async (req, masterlistId, remark, client 
     RETURNING *
   `;
 
-  const result = await db.query(query, [new Date(), remark, masterlistId]);
+  const result = await db.query(query, [malaysiaTimestamp(), remark, masterlistId]);
   return result.rows[0];
 };
 
@@ -770,7 +771,7 @@ const updateCheckIn = async (req,  masterlist_id , type ) => {
   const query = `UPDATE checkin SET status = 'Check-Out' , checkout_time = $1  WHERE no = $2  RETURNING *`;
 
   const values = [
-    new Date() ,  masterlist_id  
+    malaysiaTimestamp() ,  masterlist_id
   ];
 
   const result = await req.app.get('pool').query(
@@ -860,6 +861,34 @@ const cancelCheckinWithArchive = async (req, { checkin_id, action_by, remark }) 
 
   try {
     await client.query('BEGIN');
+
+    // Prevent a QG sync from adding a new reference while we cancel this check-in.
+    const locked = await client.query('SELECT no FROM checkin WHERE no = $1 FOR UPDATE', [checkin_id]);
+    if (locked.rowCount === 0) {
+      const error = new Error('Check-in record not found');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    // Inspection submission also locks the job. Check history after acquiring
+    // that lock so a concurrent submission cannot be silently removed.
+    const jobs = await client.query(
+      'SELECT id, status FROM qg_job WHERE source_checkin_id = $1 ORDER BY id FOR UPDATE',
+      [checkin_id]
+    );
+    if (jobs.rowCount > 0) {
+      const jobIds = jobs.rows.map(job => job.id);
+      const inspections = await client.query(
+        'SELECT id FROM qg_inspection WHERE qg_job_id = ANY($1::bigint[]) LIMIT 1',
+        [jobIds]
+      );
+      if (inspections.rowCount > 0 || jobs.rows.some(job => job.status !== 'PENDING')) {
+        const error = new Error('Cannot cancel this check-in because it has QG inspection history or is no longer pending. Resolve the QG record before cancelling.');
+        error.statusCode = 409;
+        throw error;
+      }
+      await client.query('DELETE FROM qg_job WHERE id = ANY($1::bigint[])', [jobIds]);
+    }
 
     const archiveQuery = `
       INSERT INTO cencellcheckin (
@@ -1122,7 +1151,7 @@ const getMasterBacklogCount = async (req) => {
     SELECT COUNT(*)::int AS count
     FROM masterlist
     WHERE caout_date IS NULL
-      AND (cafi_date IS NULL OR cafi_date < CURRENT_DATE)
+      AND (cafi_date IS NULL OR cafi_date < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuala_Lumpur')::date)
   `;
 
   const result = await req.app.get('pool').query(query);
@@ -1200,7 +1229,7 @@ const getDashboardStats = async (req) => {
       LEFT JOIN task_item t 
         ON t.masterlist_id = m.no 
         AND t.type = m2.type
-      WHERE m.cafi_date = CURRENT_DATE
+      WHERE m.cafi_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuala_Lumpur')::date
     ) AS tasks
     WHERE checkout_time IS NULL OR status IS NULL OR status != 'Check-Out'
   `;
@@ -1257,7 +1286,7 @@ const getDashboardStats = async (req) => {
         return;
       }
 
-      const checkinMs = new Date(bay.checkin_time).getTime();
+      const checkinMs = malaysiaInstant(bay.checkin_time).getTime();
       const elapsedMinutes = (nowMs - checkinMs) / 60000;
       const remaining = durationMinutes - elapsedMinutes;
 
@@ -1299,7 +1328,7 @@ const getTasksList = async (req, data) => {
   const query = `
     SELECT m.* , m2.type , c.status , b.name , sum(t.price) as total , sum(t.duration) as duration,
     c.checkout_time , c.remark,  c.checkin_time,
-    (EXTRACT(EPOCH FROM (c.checkout_time - c.created_at)) / 60)::int AS diff_minutes  FROM masterlist m 
+    (EXTRACT(EPOCH FROM (c.checkout_time - COALESCE(c.checkin_time, c.created_at + INTERVAL '8 hours'))) / 60)::int AS diff_minutes  FROM masterlist m
   LEFT JOIN (SELECT TRIM(type)as type , masterlist_id FROM task_item WHERE (TRIM(type) = 'FITMENT' 
   OR TRIM(type) = 'HOIST') GROUP BY TRIM(type) ,masterlist_id) m2 ON m2.masterlist_id = m.no
   LEFT JOIN checkin c ON m.no = c.masterlist_id AND c.type = m2.type
@@ -1369,14 +1398,14 @@ const getTasksList2 = async (req, data) => {
   }
 
   // Date range
-  const today = new Date().toISOString().slice(0, 10);
+  const today = malaysiaDate();
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
   const dateField = data.date_field === 'checkin' ? 'c.checkin_time' : 'm.cafi_date';
   if (data.backlog_only) {
     masterFilters.push(`status = 'Active'`);
     masterFilters.push(`cafi_date > DATE '2026-02-01'`);
-    masterFilters.push(`cafi_date < CURRENT_DATE`);
+    masterFilters.push(`cafi_date < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuala_Lumpur')::date`);
     masterFilters.push(`no NOT IN (1306193, 2594130)`);
     joinFilters.push(`c.checkin_time IS NULL`);
   } else if (dateField === 'c.checkin_time') {
@@ -1542,7 +1571,7 @@ const getCancelledCheckinList = async (req, data) => {
     addFilter((p) => `SUBSTRING(m.fitment_id FROM 1 FOR 1) = ${p[0]}`, [data.fitment_type]);
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = malaysiaDate();
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
   const dateField = data.date_field === 'checkin' ? 'cc.checkin_time' : 'm.cafi_date';
@@ -1662,7 +1691,7 @@ const getTasksStatusNullCount = async (req) => {
     WHERE c.checkin_time IS NULL 
       AND m.status = 'Active'
       AND m.cafi_date > DATE '2026-02-01'
-      AND m.cafi_date < CURRENT_DATE
+      AND m.cafi_date < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuala_Lumpur')::date
       AND m.cancel_time IS NULL
       AND m.no not IN (1306193, 2594130)
       AND m2.type IS NOT NULL
@@ -1738,7 +1767,7 @@ const getAchievementList = async (req, data) => {
     values.push(data.fitment_type);
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = malaysiaDate();
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
   const dateField = data.date_field === 'checkin'
@@ -1888,7 +1917,7 @@ const getAchievementAnalysis = async (req, data) => {
     values.push(`%${data.model_code}%`);
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = malaysiaDate();
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
   const dateField = data.date_field === 'checkin'
@@ -2357,7 +2386,7 @@ const getTasksAnalisys2 = async (req, data ) => {
   }
 
   // 🔹 Date range filter
-  const today = new Date().toISOString().slice(0, 10);
+  const today = malaysiaDate();
   const dateFrom = data.date_from || today;
   const dateTo = data.date_to || dateFrom;
   filters.push(`m.cafi_date::date BETWEEN $${i}::date AND $${i+1}::date`);
@@ -2833,7 +2862,7 @@ const updatePickup = async (req, no) => {
   const query = `UPDATE checkin SET  accessory_pickup = $1 , accessory_status = 'Completed' WHERE no = $2 RETURNING *`;
 
   const values = [
-    new Date() ,  no
+    malaysiaTimestamp() ,  no
   ];
 
   const result = await req.app.get('pool').query(
@@ -2849,7 +2878,7 @@ const updateReady = async (req, no) => {
   const query = `UPDATE checkin SET accessories = $1 , accessory_status = 'Ready' WHERE no = $2 RETURNING *`;
 
   const values = [
-    new Date() ,  no
+    malaysiaTimestamp() ,  no
   ];
 
   const result = await req.app.get('pool').query(
@@ -2865,7 +2894,7 @@ const updateCheckingTime = async (req, no) => {
   const query = `UPDATE checkin SET checking = $1 WHERE no = $2 RETURNING *`;
 
   const values = [
-    new Date(), no
+    malaysiaTimestamp(), no
   ];
 
   const result = await req.app.get('pool').query(
@@ -2880,7 +2909,7 @@ const updatePreparing = async (req, no) => {
   const query = `UPDATE checkin SET preparing_time = $1 , accessory_status = 'Preparing' WHERE no = $2 RETURNING *`;
 
   const values = [
-    new Date() ,  no
+    malaysiaTimestamp() ,  no
   ];
 
   const result = await req.app.get('pool').query(
@@ -2897,7 +2926,7 @@ const updatePickupTime = async (req, no) => {
   const query = `UPDATE checkin SET checkin_time = $1 WHERE no = $2 RETURNING *`;
 
   const values = [
-    new Date() ,  no
+    malaysiaTimestamp() ,  no
   ];
 
   const result = await req.app.get('pool').query(
@@ -3350,10 +3379,10 @@ const getStaffTaskList = async (req , month , staff_id, options = {}) => {
   const dateTo = options.dateTo || null;
   const hasDateRange = Boolean(dateFrom && dateTo);
   const dateFilterSql = hasDateRange
-    ? `c.checkin_time >= $3::date
-  AND c.checkin_time < ($4::date + INTERVAL '1 day')`
-    : `c.checkin_time >= $1
-  AND c.checkin_time < ($1::date + INTERVAL '1 month')`;
+    ? `c.checkin_time >= $2::date
+  AND c.checkin_time < ($3::date + INTERVAL '1 day')`
+    : `c.checkin_time >= $2::date
+  AND c.checkin_time < ($2::date + INTERVAL '1 month')`;
 
   const query = `SELECT 
     c.no AS checkin_id,
@@ -3417,7 +3446,7 @@ LEFT JOIN staff s2
 
 LEFT JOIN checkin_staff selected_staff
     ON selected_staff.checkin_id = c.no
-   AND selected_staff.staff_id = $2
+   AND selected_staff.staff_id = $1
 
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS non_trainee_staff_count
@@ -3433,7 +3462,7 @@ AND EXISTS (
     SELECT 1
     FROM checkin_staff cs
     WHERE cs.checkin_id = c.no
-      AND cs.staff_id = $2
+      AND cs.staff_id = $1
 )
 
 GROUP BY
@@ -3456,12 +3485,9 @@ GROUP BY
 ORDER BY c.checkin_time;
 `;
 
-  const values = [
-    month , staff_id
-  ];
-  if (hasDateRange) {
-    values.push(dateFrom, dateTo);
-  }
+  const values = hasDateRange
+    ? [staff_id, dateFrom, dateTo]
+    : [staff_id, month];
 
   const result = await req.app.get('pool').query(
     query,
@@ -3513,7 +3539,7 @@ ORDER BY accessories DESC`;
 };
 
 // Bulk cancel masterlist entries by CAFI date and seq range
-const cancelMasterlistByRange = async (req, date, seqFrom, seqTo, remark, cancelTime = new Date()) => {
+const cancelMasterlistByRange = async (req, date, seqFrom, seqTo, remark, cancelTime = malaysiaTimestamp()) => {
   const query = `
     UPDATE masterlist
     SET cancel_time = $4, cancel_remark = $5
@@ -3533,7 +3559,7 @@ const inactiveMaster = async (req  , status , cancel_remark  , no) => {
   const query = `UPDATE masterlist SET status = $1 , cancel_remark = $2 , cancel_time = $3 WHERE no = $4`;
 
   const values = [
-    status , cancel_remark , new Date() , no
+    status , cancel_remark , malaysiaTimestamp() , no
   ];
 
   const result = await req.app.get('pool').query(

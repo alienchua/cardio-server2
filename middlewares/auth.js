@@ -17,6 +17,12 @@ const auth = async (req, res, next) => {
     // }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.type === 'admin') {
+      const result = await req.app.get('pool').query('SELECT is_active FROM admins WHERE id = $1', [decoded.id]);
+      if (!result.rows[0] || result.rows[0].is_active === false) {
+        return res.error('Access denied', 'Admin account is inactive or unavailable', 403);
+      }
+    }
     req.user = decoded;
     console.log(decoded)
     next();

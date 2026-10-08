@@ -1,0 +1,7 @@
+# CA Line Check
+
+Run `npm run migrate:qg` and then `npm run migrate:ca` after the core `admins` and `masterlist` tables exist. The CA migration is safe to rerun. It moves records from the earlier CA table into CA cases and retains their checks and defect photos. CA records never reference QG inspections. CA checks use the shared QG dropdown lists.
+
+CA Line Check is a manual register for random checks by the outside CA company. A supervisor or superadmin can type a Fitment ID and choose **Find**. The lookup reads the masterlist and its work items, fills in chassis and model, and detects Fitment or Hoist. When both work types exist, the user selects one. If no vehicle matches, the user can enter the vehicle and work type manually. A fitment ID or chassis number and a work type are required for new cases. New checks use **Defect** or **Info**, with one or more entries selected from CA's type, description and area dropdowns. Remarks and photos remain optional. Previous Approved results remain in history; correcting one requires a reason. Defect and Info cases can be rechecked, and each submission preserves earlier checks.
+
+All `/auth/ca/line-check/*` endpoints require an active supervisor or superadmin account. `checked_by_name` and `checked_at` describe the outside company's work; `recorded_by` and `recorded_at` identify the Cardio user who entered it. Photos, when added, use the existing S3 configuration.

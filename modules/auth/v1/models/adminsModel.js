@@ -24,19 +24,19 @@ const getAdminByPhone = async (req, phone) => {
   return result.rows[0];
 };
 
-const insertAdmin = async (req, { username, email, phone, hashedPassword, role }) => {
+const insertAdmin = async (req, { username, email, phone, hashedPassword, role, is_active = true }) => {
   const result = await req.app.get('pool').query(
-    `INSERT INTO admins (username, email, phone, password, role)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, username, email, phone, role, created_at`,
-    [username, email || null, phone || null, hashedPassword, role || 'admin']
+    `INSERT INTO admins (username, email, phone, password, role, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, username, email, phone, role, is_active, created_at`,
+    [username, email || null, phone || null, hashedPassword, role || 'admin', is_active]
   );
   return result.rows[0];
 };
 
 const getAdminById = async (req, id) => {
   const result = await req.app.get('pool').query(
-    'SELECT id, username, email, phone, role, created_at FROM admins WHERE id = $1 LIMIT 1',
+    'SELECT id, username, email, phone, role, is_active, created_at FROM admins WHERE id = $1 LIMIT 1',
     [id]
   );
   return result.rows[0];
@@ -44,37 +44,22 @@ const getAdminById = async (req, id) => {
 
 const getAdmins = async (req) => {
   const result = await req.app.get('pool').query(
-    `SELECT DISTINCT ON (id) id, username, email, phone, role, created_at 
+    `SELECT DISTINCT ON (id) id, username, email, phone, role, is_active, created_at
      FROM admins 
      ORDER BY id, created_at DESC`
   );
   return result.rows;
 };
 
-const updateAdmin = async (req, { id, username, email, phone, role, hashedPassword }) => {
-  const hasPasswordUpdate = Boolean(hashedPassword);
-  const query = hasPasswordUpdate
-    ? `UPDATE admins
-       SET username = $1,
-           email = $2,
-           phone = $3,
-           role = $4,
-           password = $5
-       WHERE id = $6
-       RETURNING id, username, email, phone, role, created_at`
-    : `UPDATE admins
-       SET username = $1,
-           email = $2,
-           phone = $3,
-           role = $4
-       WHERE id = $5
-       RETURNING id, username, email, phone, role, created_at`;
-
-  const values = hasPasswordUpdate
-    ? [username, email || null, phone || null, role || 'admin', hashedPassword, id]
-    : [username, email || null, phone || null, role || 'admin', id];
-
-  const result = await req.app.get('pool').query(query, values);
+const updateAdmin = async (req, { id, username, email, phone, role, hashedPassword, is_active }) => {
+  const result = await req.app.get('pool').query(
+    `UPDATE admins
+     SET username = $1, email = $2, phone = $3, role = $4,
+         password = COALESCE($5, password), is_active = COALESCE($6, is_active)
+     WHERE id = $7
+     RETURNING id, username, email, phone, role, is_active, created_at`,
+    [username, email || null, phone || null, role || 'admin', hashedPassword || null, is_active ?? null, id]
+  );
   return result.rows[0];
 };
 

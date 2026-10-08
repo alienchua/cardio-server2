@@ -53,7 +53,7 @@ FROM (
     m.no,
     m.chassis,
     m.fitment_id,
-    c.created_at AS checkin_time,
+    COALESCE(c.checkin_time, c.created_at + INTERVAL '8 hours') AS checkin_time,
     m.model_description,
     c.no AS checkin_id,
     COALESCE(SUM(t.duration), 0) AS duration
@@ -62,7 +62,7 @@ FROM (
   LEFT JOIN task_item t ON t.masterlist_id = m.no
   WHERE c.bay_id = b.no
     AND c.status = 'Check-In'
-  GROUP BY m.no, m.chassis, m.fitment_id, c.created_at, m.model_description, c.no
+  GROUP BY m.no, m.chassis, m.fitment_id, c.created_at, c.checkin_time, m.model_description, c.no
 ) AS q
 
   ) AS checkin_list
@@ -119,7 +119,7 @@ FROM (
     m.no,
     m.chassis,
     m.fitment_id,
-    c.created_at AS checkin_time,
+    COALESCE(c.checkin_time, c.created_at + INTERVAL '8 hours') AS checkin_time,
     m.model_description,
     c.no AS checkin_id,
     COALESCE(SUM(t.duration), 0) AS duration
@@ -128,7 +128,7 @@ FROM (
   LEFT JOIN task_item t ON t.masterlist_id = m.no
   WHERE c.bay_id = b.no
     AND c.status = 'Check-In'
-  GROUP BY m.no, m.chassis, m.fitment_id, c.created_at, m.model_description, c.no
+  GROUP BY m.no, m.chassis, m.fitment_id, c.created_at, c.checkin_time, m.model_description, c.no
 ) AS q
 
   ) AS checkin_list
@@ -336,8 +336,8 @@ const getBayHistoryByDate = async (req , date) => {
   const query = `
     SELECT 
       bl.no,
-      to_char(DATE(bl.created_at), 'YYYY-MM-DD') AS created_date,
-      to_char(bl.created_at, 'HH24:MI') AS created_time,
+      to_char(DATE(bl.created_at + INTERVAL '8 hours'), 'YYYY-MM-DD') AS created_date,
+      to_char(bl.created_at + INTERVAL '8 hours', 'HH24:MI') AS created_time,
       bl.created_at,
       bl.remark,
       bl.staff_id,
@@ -352,7 +352,7 @@ const getBayHistoryByDate = async (req , date) => {
     LEFT JOIN bay b ON b.no = bl.bay_id
     LEFT JOIN staff s ON s.no = bl.staff_id
     LEFT JOIN admins a ON a.id = bl.action_by
-    WHERE ($1::date IS NULL OR bl.created_at::date = $1::date)
+    WHERE ($1::date IS NULL OR (bl.created_at + INTERVAL '8 hours')::date = $1::date)
     ORDER BY b.name, bl.created_at DESC
   `;
 
@@ -412,7 +412,9 @@ const getBayPerformanceAnalytics = async (req, date, model, dateTo = null, bayNa
       COALESCE(task_summary.estimated_cycle_time, 0) AS estimated_cycle_time,
       COALESCE(task_summary.accessory_names, '') AS accessory_names,
       CASE
-        WHEN c.checkin_time IS NOT NULL AND c.checkout_time IS NOT NULL
+        WHEN c.status = 'Check-Out'
+          AND c.checkin_time IS NOT NULL AND c.checkout_time IS NOT NULL
+          AND c.checkout_time >= c.checkin_time
         THEN ROUND(EXTRACT(EPOCH FROM (c.checkout_time - c.checkin_time)) / 60.0, 2)
         ELSE NULL
       END AS actual_cycle_time,
@@ -437,21 +439,31 @@ const getBayPerformanceAnalytics = async (req, date, model, dateTo = null, bayNa
       LEFT JOIN staff s ON s.no = cs.staff_id
       WHERE cs.checkin_id = c.no
     ) AS staff_summary ON TRUE
-    WHERE c.status = 'Check-Out'
-      AND c.checkin_time IS NOT NULL
-      AND c.checkout_time IS NOT NULL
-      AND c.checkout_time >= c.checkin_time
-      AND m.cancel_time IS NULL
+    WHERE m.cancel_time IS NULL
+      AND (
+        $5::text = 'history'
+        OR (
+          c.status = 'Check-Out'
+          AND c.checkin_time IS NOT NULL
+          AND c.checkout_time IS NOT NULL
+          AND c.checkout_time >= c.checkin_time
+        )
+      )
       AND (
         $1::date IS NULL
         OR (
           (
+            $5::text = 'history'
+            AND c.checkin_time::date >= $1::date
+            AND c.checkin_time::date <= COALESCE($3::date, $1::date)
+          )
+          OR (
             $5::text = 'fitment'
             AND m.cafi_date >= $1::date
             AND m.cafi_date < (COALESCE($3::date, $1::date) + INTERVAL '1 day')
           )
           OR (
-            $5::text <> 'fitment'
+            $5::text = 'checkout'
             AND c.checkout_time >= $1::date
             AND c.checkout_time < (COALESCE($3::date, $1::date) + INTERVAL '1 day')
           )
@@ -463,7 +475,7 @@ const getBayPerformanceAnalytics = async (req, date, model, dateTo = null, bayNa
         OR m.model_description ILIKE $2
         OR m.model_code ILIKE $2
       )
-    ORDER BY b.name ASC, c.checkout_time ASC, c.no ASC
+    ORDER BY b.name ASC, c.checkin_time ASC, c.no ASC
   `;
 
   const values = [
@@ -471,7 +483,7 @@ const getBayPerformanceAnalytics = async (req, date, model, dateTo = null, bayNa
     model ? `%${model}%` : null,
     dateTo || date || null,
     bayName || null,
-    dateField === 'fitment' ? 'fitment' : 'checkout'
+    ['fitment', 'history'].includes(dateField) ? dateField : 'checkout'
   ];
 
   const result = await req.app.get('pool').query(query, values);
