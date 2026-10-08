@@ -34,13 +34,15 @@ const uploadBufferToS3 = ({ key, buffer, contentType }) => {
   const dateStamp = amzDate.slice(0, 8);
   const payloadHash = hash(buffer);
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-  const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
+  const sessionToken = process.env.AWS_SESSION_TOKEN;
+  const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date' + (sessionToken ? ';x-amz-security-token' : '');
 
   const canonicalHeaders = [
     `content-type:${contentType}`,
     `host:${host}`,
     `x-amz-content-sha256:${payloadHash}`,
-    `x-amz-date:${amzDate}`
+    `x-amz-date:${amzDate}`,
+    ...(sessionToken ? [`x-amz-security-token:${sessionToken}`] : [])
   ].join('\n') + '\n';
 
   const canonicalRequest = [
@@ -73,7 +75,8 @@ const uploadBufferToS3 = ({ key, buffer, contentType }) => {
         'Content-Type': contentType,
         'Content-Length': buffer.length,
         'X-Amz-Content-Sha256': payloadHash,
-        'X-Amz-Date': amzDate
+        'X-Amz-Date': amzDate,
+        ...(sessionToken ? { 'X-Amz-Security-Token': sessionToken } : {})
       }
     }, (res) => {
       const chunks = [];
@@ -93,12 +96,40 @@ const uploadBufferToS3 = ({ key, buffer, contentType }) => {
       });
     });
 
+    req.setTimeout(60000, () => req.destroy(new Error('S3 upload timed out. Please retry.')));
     req.on('error', reject);
     req.write(buffer);
     req.end();
   });
 };
 
+const getSignedReadUrl = (key, expiresIn = 300) => {
+  const { AWS_REGION: region, AWS_S3_BUCKET: bucket, AWS_ACCESS_KEY_ID: accessKeyId,
+    AWS_SECRET_ACCESS_KEY: secretAccessKey, AWS_SESSION_TOKEN: sessionToken } = process.env;
+  if (!region || !bucket || !accessKeyId || !secretAccessKey) return null;
+  const host = `${bucket}.s3.${region}.amazonaws.com`;
+  const path = `/${encodeKey(key)}`;
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const params = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${accessKeyId}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': 'host',
+    ...(sessionToken ? { 'X-Amz-Security-Token': sessionToken } : {})
+  };
+  const uriEncode = (value) => encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  const canonicalQuery = Object.entries(params).sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => `${uriEncode(name)}=${uriEncode(value)}`).join('&');
+  const canonicalRequest = ['GET', path, canonicalQuery, `host:${host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, hash(canonicalRequest)].join('\n');
+  const signature = hmac(getSignatureKey(secretAccessKey, dateStamp, region, 's3'), stringToSign, 'hex');
+  return `https://${host}${path}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+};
+
 module.exports = {
-  uploadBufferToS3
+  uploadBufferToS3,
+  getSignedReadUrl
 };

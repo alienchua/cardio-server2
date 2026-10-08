@@ -16,7 +16,15 @@ require('dotenv').config();
 const ACCESS_TOKEN_EXPIRES_IN = '7d';
 
 const createAdmin = async (req, res, next) => {
-  const { username, email, phone, password, role = 'admin' } = req.body;
+  const { username, email, phone, password, role = 'admin', is_active = true } = req.body;
+
+  if (String(req.user?.role || '').toLowerCase() === 'supervisor' && role !== 'qg') {
+    return res.status(403).json({ success: false, message: 'Supervisors can only create QG accounts' });
+  }
+
+  if (typeof is_active !== 'boolean') {
+    return res.status(400).json({ success: false, message: 'Status must be active or inactive' });
+  }
 
   if (!username || !password) {
     return res.status(400).json({
@@ -52,7 +60,7 @@ const createAdmin = async (req, res, next) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const admin = await insertAdmin(req, { username, email, phone, hashedPassword, role });
+    const admin = await insertAdmin(req, { username, email, phone, hashedPassword, role, is_active });
 
     res.status(201).json({
       success: true,
@@ -85,8 +93,14 @@ const getAdminWithId = async (req, res, next) => {
 
 const updateAdminById = async (req, res, next) => {
   try {
-    const { id, username, email, phone, role, password } = req.body;
+    const { id, username, email, phone, role, password, is_active } = req.body;
 
+    if (is_active !== undefined && typeof is_active !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'Status must be active or inactive' });
+    }
+    if (is_active === false && String(req.user?.id) === String(id) && req.user?.type === 'admin') {
+      return res.status(400).json({ success: false, message: 'You cannot deactivate your own account' });
+    }
     if (!id) {
       return res.status(400).json({ success: false, message: 'Admin id is required' });
     }
@@ -111,19 +125,25 @@ const updateAdminById = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Admin not found' });
     }
 
+    if (String(req.user?.role || '').toLowerCase() === 'supervisor' &&
+        (['admin', 'superadmin', 'supervisor'].includes(String(existing.role || '').toLowerCase()) ||
+         (role || existing.role) !== 'qg')) {
+      return res.status(403).json({ success: false, message: 'Supervisors can only assign QG to ordinary accounts or edit QG accounts' });
+    }
+
     const [existingEmail, existingUsername, existingPhone] = await Promise.all([
       email ? getAdminByEmail(req, email) : null,
       getAdminByUsername(req, username),
       phone ? getAdminByPhone(req, phone) : null
     ]);
 
-    if (existingUsername && existingUsername.id !== Number(id)) {
+    if (existingUsername && String(existingUsername.id) !== String(id)) {
       return res.status(400).json({ success: false, message: 'Username already exists' });
     }
-    if (existingEmail && existingEmail.id !== Number(id)) {
+    if (existingEmail && String(existingEmail.id) !== String(id)) {
       return res.status(400).json({ success: false, message: 'Email already exists' });
     }
-    if (existingPhone && existingPhone.id !== Number(id)) {
+    if (existingPhone && String(existingPhone.id) !== String(id)) {
       return res.status(400).json({ success: false, message: 'Phone already exists' });
     }
 
@@ -135,7 +155,8 @@ const updateAdminById = async (req, res, next) => {
       email,
       phone,
       role: role || existing.role,
-      hashedPassword
+      hashedPassword,
+      is_active
     });
 
     res.status(200).json({
@@ -173,6 +194,10 @@ const adminLogin = async (req, res, next) => {
         success: false,
         message: 'Invalid email or password'
       });
+    }
+
+    if (admin.is_active === false) {
+      return res.status(403).json({ success: false, message: 'Your admin account is inactive' });
     }
 
     const payload = { id: admin.id, role: admin.role || 'admin', type: 'admin' };

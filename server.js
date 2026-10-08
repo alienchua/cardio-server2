@@ -7,11 +7,15 @@ const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
 const { Pool } = require('pg');
+const { databaseTypes } = require('./utils/malaysiaTime');
 require('dotenv').config();
 dotenv.config();
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  types: databaseTypes,
+  // Existing database-generated audit timestamps are stored as UTC wall time.
+  options: '-c timezone=UTC'
 });
 
 
@@ -79,7 +83,7 @@ app.set('pool', pool)
 
 app.use(cors({
   origin: '*', // Allow all origins (you can restrict this to specific origins)
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'PUT'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 

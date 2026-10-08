@@ -195,6 +195,13 @@ const refreshAccessToken = async (req, res, next) => {
       refreshExpiresAt: decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null
     });
 
+    if (decoded.type === 'admin') {
+      const result = await req.app.get('pool').query('SELECT is_active FROM admins WHERE id = $1', [decoded.id]);
+      if (!result.rows[0] || result.rows[0].is_active === false) {
+        return res.status(403).json({ success: false, message: 'Admin account is inactive or unavailable' });
+      }
+    }
+
     const storedRefreshToken = await getRefreshToken(req, token);
     if (!storedRefreshToken && decoded.type !== 'admin') {
       console.warn('[auth] Refresh token failed: token not found in database', {

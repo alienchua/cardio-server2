@@ -5,6 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "migrate:admin-status": "node scripts/applyAdminStatusMigration.js",
+    "migrate:audit": "node scripts/applyAuditMigration.js",
+    "migrate:qg": "node scripts/applyQgMigration.js",
+    "migrate:ca": "node scripts/applyCaLineCheckMigration.js",
+    "migrate:defect-approval": "node scripts/applyDefectApprovalMigration.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

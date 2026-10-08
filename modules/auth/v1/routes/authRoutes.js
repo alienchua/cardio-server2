@@ -139,10 +139,31 @@ const {
   getSpecialCarModelsCtrl,
   updateSpecialCarSettingsCtrl
 } = require('../controllers/settingsController');
+const {
+  photo: uploadQgPhoto,
+  dashboard: getQgDashboard,
+  pending: getQgPending,
+  scan: resolveQgScan,
+  detail: getQgJobDetail,
+  issues: getQgDefectIssues,
+  options: getQgDefectOptions,
+  updateOptions: updateQgDefectOptions,
+  submit: submitQgInspection,
+  inspections: getQgInspections,
+  exportInspections: exportQgInspections,
+  inspectionDetail: getQgInspectionDetail,
+  approveDefect: approveQgInspectionDefect,
+  cancelCheck: cancelQgCheck
+} = require('../controllers/qgController');
+const caLineCheck = require('../controllers/caLineCheckController');
+const qgOverview = require('../controllers/qgOverviewController');
+const audit = require('../controllers/auditController');
   
 const auth = require('../../../../middlewares/auth');
 const errorFormatter = require('../../../../middlewares/errorFormatter');
 const roleMiddleware = require('../../../../middlewares/roleMiddleware');
+const requireAnyRole = require('../../../../middlewares/requireAnyRole');
+const requireAdminAccount = require('../../../../middlewares/requireAdminAccount');
 const sanitizeInputs = require('../../../../middlewares/sanitize');
 const responseFormatter = require('../../../../middlewares/responseFormatter');
 const router = express.Router();
@@ -170,15 +191,49 @@ router.post('/adminLogin', sanitizeInputs, loginValidation, errorFormatter, admi
 router.post('/refresh-token', errorFormatter, refreshAccessToken);
 router.post('/logout', auth, logout);
 router.get('/admin/me', auth, getCurrentAdmin);
+
+// Quality Gate mobile and admin reporting
+// Audit reads are available to QG accounts; only supervisors can write.
+router.get('/audit/capabilities', auth, requireAdminAccount, audit.capabilities);
+router.get('/audit/jobs', auth, requireAdminAccount, audit.jobs);
+router.get('/audit/jobs/:jobId', auth, requireAdminAccount, audit.job);
+router.get('/audit/inspections', auth, requireAdminAccount, audit.list);
+router.get('/audit/inspections/:auditId', auth, requireAdminAccount, audit.detail);
+router.post('/audit/jobs/:jobId/inspections', auth, requireAdminAccount, requireAnyRole('supervisor', 'superadmin'), audit.submit);
+router.post('/audit/jobs/:jobId/photos', auth, requireAdminAccount, requireAnyRole('supervisor', 'superadmin'), express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '10mb' }), audit.photo);
+router.post('/audit/inspections/:auditId/cancel', auth, requireAdminAccount, requireAnyRole('supervisor', 'superadmin'), audit.cancel);
+
+router.get('/qg/dashboard', auth, requireAdminAccount, getQgDashboard);
+router.get('/qg/overview', auth, requireAnyRole('manager', 'supervisor', 'admin', 'superadmin'), qgOverview.overview);
+router.get('/qg/jobs/pending', auth, requireAdminAccount, getQgPending);
+router.post('/qg/resolve-scan', auth, requireAdminAccount, resolveQgScan);
+router.get('/qg/jobs/:jobId', auth, requireAdminAccount, getQgJobDetail);
+router.get('/qg/defect-issues', auth, requireAdminAccount, getQgDefectIssues);
+router.get('/qg/defect-options', auth, requireAdminAccount, getQgDefectOptions);
+router.post('/qg/defect-options/:category', auth, requireAnyRole('admin', 'manager', 'supervisor', 'superadmin'), updateQgDefectOptions);
+router.post('/qg/jobs/:jobId/photos', auth, requireAdminAccount, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '10mb' }), uploadQgPhoto);
+router.post('/qg/jobs/:jobId/inspections', auth, requireAdminAccount, submitQgInspection);
+router.get('/qg/inspections', auth, requireAnyRole('qg', 'manager', 'supervisor', 'admin', 'superadmin'), getQgInspections);
+router.get('/qg/inspections/export', auth, requireAnyRole('qg', 'manager', 'supervisor', 'admin', 'superadmin'), exportQgInspections);
+router.get('/qg/inspections/:inspectionId', auth, requireAdminAccount, getQgInspectionDetail);
+router.post('/qg/inspections/:inspectionId/cancel', auth, requireAdminAccount, requireAnyRole('manager', 'supervisor', 'admin', 'superadmin'), cancelQgCheck);
+router.post('/qg/inspections/:inspectionId/defects/:defectId/approve', auth, requireAnyRole('manager', 'supervisor', 'admin', 'superadmin'), approveQgInspectionDefect);
+// CA is an external check recorded manually by a Cardio supervisor.
+router.get('/ca/line-check/cases', auth, requireAnyRole('supervisor', 'superadmin'), caLineCheck.cases);
+router.get('/ca/line-check/vehicles', auth, requireAnyRole('supervisor', 'superadmin'), caLineCheck.vehicles);
+router.post('/ca/line-check/cases', auth, requireAnyRole('supervisor', 'superadmin'), caLineCheck.create);
+router.get('/ca/line-check/cases/:caseId', auth, requireAnyRole('supervisor', 'superadmin'), caLineCheck.detail);
+router.post('/ca/line-check/cases/:caseId/checks', auth, requireAnyRole('supervisor', 'superadmin'), caLineCheck.submit);
+router.post('/ca/line-check/drafts/:draftKey/photos', auth, requireAnyRole('supervisor', 'superadmin'), express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '10mb' }), caLineCheck.photo);
 router.post('/add-to-blacklist', sanitizeInputs, [
   body('token').exists().withMessage('Token is required')
 ], errorFormatter, addToBlacklist);
 router.get('/dashboard', auth,  roleMiddleware('admin'),errorFormatter,responseFormatter, dashboard);
 router.post('/getUser', getUser);
-router.post('/createAdmin', createAdmin);
-router.get('/getAdminWithId/:id', getAdminWithId);
-router.post('/updateAdmin', auth, updateAdminById);
-router.get('/getAddAdmin', getAddAdmin);
+router.post('/createAdmin', auth, requireAnyRole('admin', 'supervisor', 'superadmin'), createAdmin);
+router.get('/getAdminWithId/:id', auth, requireAnyRole('admin', 'supervisor', 'superadmin'), getAdminWithId);
+router.post('/updateAdmin', auth, requireAnyRole('admin', 'supervisor', 'superadmin'), updateAdminById);
+router.get('/getAddAdmin', auth, requireAnyRole('admin', 'supervisor', 'superadmin'), getAddAdmin);
 
 // staffs
 router.post('/insertStaffs', insertStaffs);
@@ -236,7 +291,7 @@ router.get('/dashboardStats', getDashboardStatsCtrl);
 router.post('/getMasterDetail', getMasterDetail);
 router.post('/taskOffset', taskOffset);
 router.get('/getTasksListCtrl', getTasksListCtrl);
-router.post('/getTasksListCtrl2', getTasksListCtrl2);
+router.post('/getTasksListCtrl2', auth, requireAnyRole('manager', 'supervisor', 'controller', 'admin', 'superadmin'), getTasksListCtrl2);
 router.get('/getTasksStatusNullCount', getTasksStatusNullCountCtrl);
 router.post('/getAchievementListCtrl', getAchievementListCtrl);
 router.get('/getHourlyCompletedStatsCtrl', getHourlyCompletedStatsCtrl);
@@ -252,7 +307,7 @@ router.post('/checkRemark', checkRemark);
 router.post('/getStandbyListCtrl', getStandbyListCtrl);
 router.get('/getCollectScreenCtrl', getCollectScreenCtrl);
 router.post('/getBayCurrentCheckinCtrl', getBayCurrentCheckinCtrl);
-router.post('/getTaskDetail', getTaskDetail);
+router.post('/getTaskDetail', auth, requireAnyRole('manager', 'supervisor', 'controller', 'admin', 'superadmin'), getTaskDetail);
 router.post('/updateTaskItemPrice', auth, updateTaskItemPriceCtrl);
 router.post('/getTaskItemPriceHistory', auth, getTaskItemPriceHistoryCtrl);
 router.post('/getBayStaffByName', getBayStaffByNameCtrl);
@@ -289,9 +344,9 @@ router.post('/getStandyListToday', auth, getStandyListToday);
 router.post('/getStockCheckListToday', auth, getStockCheckListToday);
 router.post('/updatecheckInTask', updatecheckInTask);
 router.get('/getCurrentCheckInCtrl', getCurrentCheckInCtrl);
-router.get('/settings/special-car', getSpecialCarSettingsCtrl);
-router.get('/settings/special-car/models', getSpecialCarModelsCtrl);
-router.post('/settings/special-car', updateSpecialCarSettingsCtrl);
+router.get('/settings/special-car', auth, requireAnyRole('admin', 'superadmin'), getSpecialCarSettingsCtrl);
+router.get('/settings/special-car/models', auth, requireAnyRole('admin', 'superadmin'), getSpecialCarModelsCtrl);
+router.post('/settings/special-car', auth, requireAnyRole('admin', 'superadmin'), updateSpecialCarSettingsCtrl);
 
 // installment
 router.post('/createInstallment', createInstallment);

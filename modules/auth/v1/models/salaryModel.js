@@ -172,7 +172,7 @@ builddata AS (
     cs.staff_id, 
     SUM(sd.total_com) AS total_com
   FROM checkin_staff cs
-  LEFT JOIN selectdata sd ON sd.checkin_no = cs.checkin_id
+  JOIN selectdata sd ON sd.checkin_no = cs.checkin_id
   WHERE UPPER(COALESCE(cs.position, '')) != 'TRAINEE'
   GROUP BY cs.staff_id
 ),
@@ -245,6 +245,14 @@ LEFT JOIN builddata2 b2 ON b2.staff_id = s.no
 LEFT JOIN inst ON inst.staff_id = s.no
 LEFT JOIN attendance sa ON sa.staff_id = s.no
 WHERE COALESCE(s.staff_id, '') <> ALL($2::text[])
+${hasDateRange ? `  AND (
+    EXISTS (
+      SELECT 1 FROM checkin_staff range_cs
+      JOIN selectdata range_task ON range_task.checkin_no = range_cs.checkin_id
+      WHERE range_cs.staff_id = s.no
+    )
+    OR b2.staff_id IS NOT NULL
+  )` : ''}
 GROUP BY 
   s.no, s.staff_id, s.name, s.nick_name, s.ic, s.email, s.bank_name, s.acc_number, s.type, s.photo,
   b.total_com, b2.total, inst.total_installment, sa.attendance, sa.absent, sa.late, sa.mc, sa.hl, sa.q, sa.al, sa.el, sa.ul, sa.cl
@@ -272,17 +280,17 @@ const getSalaryDetail = async (req , month , staff_id, options = {} ) => {
   const dateTo = options.dateTo || null;
   const hasDateRange = Boolean(dateFrom && dateTo);
   const dateFilterSql = hasDateRange
-    ? `c.checkin_time >= $3::date AND c.checkin_time < ($4::date + INTERVAL '1 day')`
+    ? `c.checkin_time >= $2::date AND c.checkin_time < ($3::date + INTERVAL '1 day')`
     : `(
       (
-        $1 ~ '^\\d{4}-\\d{2}$'
-        AND c.checkin_time >= to_date($1, 'YYYY-MM')
-        AND c.checkin_time < (to_date($1, 'YYYY-MM') + INTERVAL '1 month')
+        $2 ~ '^\\d{4}-\\d{2}$'
+        AND c.checkin_time >= to_date($2, 'YYYY-MM')
+        AND c.checkin_time < (to_date($2, 'YYYY-MM') + INTERVAL '1 month')
       )
       OR (
-        $1 !~ '^\\d{4}-\\d{2}$'
-        AND c.checkin_time >= to_date($1, 'MM-YYYY')
-        AND c.checkin_time < (to_date($1, 'MM-YYYY') + INTERVAL '1 month')
+        $2 !~ '^\\d{4}-\\d{2}$'
+        AND c.checkin_time >= to_date($2, 'MM-YYYY')
+        AND c.checkin_time < (to_date($2, 'MM-YYYY') + INTERVAL '1 month')
       )
     )`;
 
@@ -305,7 +313,7 @@ const getSalaryDetail = async (req , month , staff_id, options = {} ) => {
     STRING_AGG(DISTINCT t.short_name, '+' ORDER BY t.short_name) AS task_short_names
 FROM checkin c
 LEFT JOIN checkin_staff c2 ON c2.checkin_id = c.no
-LEFT JOIN checkin_staff selected_cs ON selected_cs.checkin_id = c.no AND selected_cs.staff_id = $2
+LEFT JOIN checkin_staff selected_cs ON selected_cs.checkin_id = c.no AND selected_cs.staff_id = $1
 LEFT JOIN masterlist m ON m.no = c.masterlist_id
 LEFT JOIN bay b ON b.no = c.bay_id
 LEFT JOIN staff s ON s.no = c2.staff_id
@@ -316,19 +324,16 @@ WHERE
     AND c.no IN (
         SELECT checkin_id 
         FROM checkin_staff 
-        WHERE staff_id = $2
+        WHERE staff_id = $1
     )
 GROUP BY 
     c.no, b.name, m.cafi_date, m.colour, m.chassis , m.model_description, selected_cs.position;
 
 `;
 
-  const values = [
-    month , staff_id
-  ];
-  if (hasDateRange) {
-    values.push(dateFrom, dateTo);
-  }
+  const values = hasDateRange
+    ? [staff_id, dateFrom, dateTo]
+    : [staff_id, month];
 
   const result = await req.app.get('pool').query(
     query,
